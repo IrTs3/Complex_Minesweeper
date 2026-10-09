@@ -1,2 +1,0 @@
-3c7c797defb404c7aa8244ada6d8306870e9728715f2f0cfcfe066ba4dfa27c5  ComplexMinesweeper-macOS-arm64.zip
-ec2abd9b3966f8b0f7b8d3527a5618ea3c4af9e17f7fb796f23cc06101e896a3  ComplexMinesweeper-macOS-arm64.dmg
