@@ -1,0 +1,13 @@
+[Unit]
+Description=每 2 分钟触发 cmsgate 探活（Healthchecks 死人开关）
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+AccuracySec=30s
+# 停机期间漏跑的那次，开机后立即补跑一次——恢复上线后马上重新给 Healthchecks 发 ping，
+# 让它尽快从"未收到 ping"的告警态恢复。
+Persistent=true
+
+[Install]
+WantedBy=timers.target

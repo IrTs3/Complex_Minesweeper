@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>复数扫雷 · Complex Minesweeper</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="stage">
+  <canvas id="board" width="900" height="640"></canvas>
+</div>
+<!-- 装饰特效层（星光 + 点击弹 USTC 字母）：铺满视口、盖在棋盘之上。
+     它在 CSS 里必须 pointer-events:none，否则会把棋盘的点击全吞掉。 -->
+<canvas id="fx" aria-hidden="true"></canvas>
+<textarea id="kb" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="keyboard"></textarea>
+<input id="filepick" type="file" accept="image/*" hidden>
+<dialog id="seed-tool">
+  <div class="st-head">
+    <h2>种子工具箱</h2>
+    <button type="button" class="st-ghost" id="seed-tool-close">关闭</button>
+  </div>
+  <p class="st-note">种子串（base64）⇄ 明文 JSON。密钥必填：留空直接拒绝；界面不回显也不记住密钥。</p>
+  <input id="seed-tool-key" type="password" placeholder="解密 / 加密密钥（必填）" autocomplete="off">
+  <textarea id="seed-tool-in" rows="4" placeholder="粘贴种子串或明文 JSON" spellcheck="false"></textarea>
+  <div class="st-actions">
+    <button type="button" id="seed-tool-decode">解密 → JSON</button>
+    <button type="button" id="seed-tool-encode">JSON → 加密</button>
+    <button type="button" id="seed-tool-copy">复制结果</button>
+  </div>
+  <pre id="seed-tool-out" hidden></pre>
+</dialog>
+<script type="module" src="dist/main.js"></script>
+</body>
+</html>

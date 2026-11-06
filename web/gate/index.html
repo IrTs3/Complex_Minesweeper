@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>复数扫雷 · 访问验证</title>
+<!-- 资源和登录页一样挂在秘密入口 /gate/<TOKEN>/ 下，必须用**相对路径**：
+     绝对路径 /gate/gate.css 会打到已 404 的公开 /gate/，登录页就裸奔了。 -->
+<link rel="stylesheet" href="gate.css">
+</head>
+<body>
+<canvas id="fx" aria-hidden="true"></canvas>
+<main class="gate-panel">
+  <h1>COMPLEX MINESWEEPER</h1>
+  <p class="sub">复数扫雷 · 内测中</p>
+
+  <form id="gate-form" method="post" action="/__login" autocomplete="off">
+    <label class="lbl" for="pw">访问密码</label>
+    <div class="pwrow">
+      <input id="pw" name="pw" type="password" required maxlength="256"
+             autocomplete="current-password" autocapitalize="off" autocorrect="off"
+             spellcheck="false" autofocus>
+      <button type="button" id="reveal" class="reveal" aria-pressed="false" aria-label="显示密码">显示</button>
+    </div>
+    <button type="submit" id="go">进 入</button>
+    <p id="err" class="err" role="alert" aria-live="polite"></p>
+    <noscript>
+      <p class="warn">未启用 JavaScript：提交后服务器会直接返回一个纯文字页面，
+        上面写着原因（密码不正确 · 尝试过于频繁 · 该密码已停用 · 该密码已过期）；
+        读完请用浏览器后退回到本页重新输入。</p>
+    </noscript>
+  </form>
+
+  <p class="foot">没拿到密码？找发给你地址的人要一个。</p>
+  <p class="foot"><a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">鄂ICP备2026059860号-1</a></p>
+  <p class="foot"><a class="ga" href="https://beian.mps.gov.cn/#/query/webSearch?code=42108102000166" target="_blank" rel="noopener noreferrer"><img src="ghs.png" alt="" width="14" height="14">鄂公网安备 42108102000166号</a></p>
+</main>
+<script src="gate.js"></script>
+</body>
+</html>

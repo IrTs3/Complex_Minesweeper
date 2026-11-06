@@ -1,0 +1,93 @@
+# ---- macOS ----
+.DS_Store
+
+# ---- IDE ----
+.idea/
+
+# ---- 其它 AI 助手的本地记忆（开发机状态，不是项目源码）----
+# .workbuddy/ 是另一个工具写的每日记忆日志，只对本地那个工具有意义。
+# 曾误提交进库（~220K markdown），已用 git rm --cached 摘除，文件仍留在本地。
+.workbuddy/
+
+# ---- 构建产物（绝不提交）----
+build/
+build-*/
+cmake-build-*/
+*.profraw
+base
+__pycache__/
+*.pyc
+
+# ---- 分发包产物：用 GitHub Releases 发布，不要提交进仓库 ----
+# 必须带前导斜杠：光写 `dist/` 会连 scripts/dist/ 一起挡掉，而那是**部署脚本源码**。
+# 后果不是看不见，是 `git add scripts/dist/x.sh` 直接拒绝，只能靠 `git commit -- 路径`
+# 绕（踩过）。web 的构建产物另有 `web/dist/` 一条，不靠这条兜。
+/dist/
+
+# ---- 第三方：交叉编译需要的源码保留；下载/编译出来的部分忽略 ----
+third_party/sfml-win/
+third_party/freetype-win/
+
+# ---- Web 端构建产物 ----
+web/node_modules/
+web/dist/
+web/build/
+
+# ---- Keynote 演讲文稿：二进制、体积大且频繁改动，不进版本库 ----
+# 已用 git rm --cached 从索引摘除；如需对外分享请走 GitHub Release
+*.key
+
+# ---- 密码闸门：凭据与运行数据绝不入库（方案 §12「凭据不进代码」）----
+# 本地管理工具默认写到 ~/.cmsgate（仓库外），这些规则是防手滑放进仓库
+.cmsgate/
+**/passwords.json
+**/passwords.json.*
+**/usage.jsonl
+**/usage.jsonl.*
+**/secret.key
+**/cmsgate.secret
+# 存活监控的 Healthchecks ping URL 也是密钥（持有者可伪造"正常"或刷 /fail），
+# 只存服务器 /etc/cmsgate/healthcheck.url（600 root），由 deploy-monitor.sh 经 stdin 注入。
+**/healthcheck.url
+
+# ---- 背景图/图标：授权已获，仍不入库（裁决 2026-10-25）----
+# ★ 2026-10-25 裁决：assets/bg.jpg + assets/icon.png 的**非商业使用授权已拿到**（2026-10-25），
+#   随包分发已明确接受；后续审计**勿再报**「图片授权」。
+#   仍不入库的理由只剩体积/历史追加成本：
+#   1. git 历史是**追加**的 —— 提交过就等于永久留存，以后想删要重写历史 + 强推，
+#      而强推会让所有已 clone 的人拿不到后续更新。**现在不提交，代价最小。**
+#   2. clone 的人本来也用不上：构建只要代码，背景图由部署时 `webbg push` 决定；
+#      桌面端包里的 assets/bg.jpg、icon.png 随 scripts/game/package.sh 打包分发（授权已覆盖）。
+#
+# 怎么补上：自己挑一张图，按 `cms webbg push --image <图>` 推一次即可；
+# 或直接放进 web/assets/（长边建议 ≤ 1920，`background-size: cover` 铺满，
+# 超过屏幕的分辨率纯属浪费 —— 同一张图 4800 宽 511 KB，1920 宽只要 136 KB）。
+# 缺图不致命：密码页与游戏都有纯色底色兜底。
+#
+# 注：撤下背景图功能需要的**纯白图**在 tools/webbg/blank.*（58 B / 290 B），
+#     那两张要入库，否则 `cms webbg off` 就没有素材。
+web/assets/bg.webp
+web/assets/bg.jpg
+
+# 同理：桌面端背景图 assets/bg.jpg（Renderer.cpp 的 resourcePaths("bg.jpg")）。
+# 与上面那张同一张授权（2026-10-25 非商业授权已获、随包分发已裁决接受），仍不入库。
+# 桌面端缺图会退回纯色底（kWindowBg）。
+assets/bg.jpg
+
+# 界面里裁出来的方形图标（assets/icon.png）。是**用户输入**，
+# 授权口径与背景图相同（2026-10-25 已获非商业授权），不入库。
+# 缺它时图标脚本会退回从 bg.jpg 居中裁。
+assets/icon.png
+
+# ── 2026-10-21 安全审查 L10 ──
+# site/ 是没接线的静态站草稿（未被任何部署脚本引用），别让 git add -A 顺手带进去。
+# 真要做它的时候，把这行删掉再 add。
+site/
+
+# 服务器/本机脚本留下的备份（gate_manager 换入口前的 .bak、nginx 片段副本等）。
+# 这些是**运行产物**而不是源码，而且可能含 token。
+*.bak
+
+# Qoder Sites 本地部署描述文件（工具生成，不进仓库）
+*.qoder.site
+dist-solver/

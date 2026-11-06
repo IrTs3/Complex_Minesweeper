@@ -1,0 +1,10 @@
+[Unit]
+Description=cmsgate 闸门数据每日快照（oneshot，由 timer 触发）
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/cmsgate/backup.sh
+# 备份要读 700 的 /var/lib/cmsgate、写 /root/cms-backup，必须以 root 跑、不能 strict 沙箱。
+# 仅保留最小约束（不提权）；机密性交给文件权限（目录 700 / 快照 600）保护。
+NoNewPrivileges=yes

@@ -1,0 +1,871 @@
+/* 密码管理界面：浅色、克制，跟项目主色 #66ccff 一致。
+   刻意不用内联样式（CSP 里 style-src 是 'self'），所有外观都在这一个文件里。 */
+
+:root {
+  --ink: #22303f;
+  --ink-soft: #5b6b7c;
+  --ink-faint: #8a99a8;
+  --line: #e2e9f0;
+  --bg: #eef2f6;
+  --card: #ffffff;
+  --accent: #66ccff;
+  --accent-deep: #0a7ea4;
+  --ok: #13805b;
+  --ok-bg: #e6f7ef;
+  --warn: #8a5a00;
+  --warn-bg: #fff5e0;
+  --bad: #b3261e;
+  --bad-bg: #fdecea;
+  --radius: 12px;
+  --shadow: 0 6px 22px rgba(20, 40, 70, .08);
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 14px/1.6 -apple-system, BlinkMacSystemFont, "PingFang SC",
+        "Microsoft YaHei", "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── 顶栏 ── */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 22px;
+  background: var(--card);
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+.brand { display: flex; align-items: baseline; gap: 10px; }
+.brand h1 { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: .01em; }
+.brand .sub { font-size: 12px; color: var(--ink-faint); }
+
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+/* 芯片是可点的（同步 / 线上闸门 / 管理口令），给个指针提示 */
+.chips .chip { cursor: pointer; transition: filter .12s ease; }
+.chips .chip:hover { filter: brightness(.965); }
+/* 对话框里的计数芯片不需要上边距 */
+.chips.inline-chips { margin: 0; }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 99px;
+  font-size: 12px;
+  line-height: 1.7;
+  background: #f2f6fa;
+  color: var(--ink-soft);
+  border: 1px solid var(--line);
+  white-space: nowrap;
+}
+.chip b { font-weight: 650; color: var(--ink); }
+.chip.ok { background: var(--ok-bg); border-color: #c6e9d9; color: var(--ok); }
+.chip.ok b { color: var(--ok); }
+.chip.warn { background: var(--warn-bg); border-color: #f0dcb0; color: var(--warn); }
+.chip.warn b { color: var(--warn); }
+.chip.bad { background: var(--bad-bg); border-color: #f5c9c5; color: var(--bad); }
+.chip.bad b { color: var(--bad); }
+
+/* ── 提示条 ── */
+.warn-strip {
+  margin: 0;
+  padding: 10px 22px;
+  background: var(--warn-bg);
+  color: var(--warn);
+  border-bottom: 1px solid #f0dcb0;
+  font-size: 13px;
+}
+.warn-strip.bad { background: var(--bad-bg); color: var(--bad); border-bottom-color: #f5c9c5; }
+
+/* ── 主体 ── */
+main { max-width: 1280px; margin: 0 auto; padding: 18px 22px 48px; }
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.spacer { flex: 1 1 auto; }
+
+.search { flex: 1 1 260px; min-width: 180px; max-width: 380px; }
+.search input { width: 100%; }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  margin-bottom: 18px;
+  overflow: hidden;
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  background: #fafcfe;
+}
+.card-head h2 { margin: 0; font-size: 14px; font-weight: 650; }
+.head-acts { margin-left: auto; display: flex; align-items: center; gap: 12px; flex: 0 0 auto; }
+.muted { color: var(--ink-faint); font-size: 12.5px; }
+/* 「同步失败，显示 12:39:41 的数据」——失败要让它在灰字里跳出来 */
+.muted.bad { color: var(--bad); }
+/* 「最近访问」标题旁边那行「共 N 条 · 筛选后 M 条」：太长就省略，
+   别把右边的「从服务器拉一份 / 条数」挤走 */
+.card-head > .muted {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 卡片内部的列头筛选条已改为「点列头 ▾」，这里只留列头按钮与浮层 */
+th[data-col] { white-space: nowrap; }
+
+.cf-btn {
+  margin-left: 4px;
+  padding: 0 4px;
+  border: none;
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 11px;
+  line-height: 1.5;
+  border-radius: 5px;
+  vertical-align: baseline;
+}
+.cf-btn:hover { background: #e8f1f8; color: var(--ink-soft); border-color: transparent; }
+.cf-btn.on {
+  color: var(--accent-deep);
+  background: rgba(102, 204, 255, .24);
+  font-weight: 700;
+}
+th.cf-active { color: var(--accent-deep); }
+
+/* 筛选浮层：挂在 body 上、position: fixed —— 不会被 .table-wrap 的 overflow 裁掉 */
+.cf-pop {
+  position: fixed;
+  z-index: 90;
+  width: 248px;
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 14px 38px rgba(15, 35, 60, .18);
+  font-size: 13px;
+}
+/* ★ 必须显式写：上面的 display:flex 会盖掉 [hidden] 的 display:none，
+   少了这条「关闭」按钮就只是把内容清空、框还在 */
+.cf-pop[hidden] { display: none; }
+
+.cf-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--ink-soft);
+}
+.cf-x {
+  padding: 0 5px;
+  border: none;
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 15px;
+  line-height: 1;
+}
+.cf-x:hover { color: var(--bad); background: transparent; border-color: transparent; }
+
+.cf-search { width: 100%; padding: 5px 8px; font-size: 12.5px; }
+
+.cf-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 34vh;
+  overflow-y: auto;
+}
+
+.cf-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--ink);
+}
+.cf-item:hover { background: #f2f7fb; }
+.cf-item > span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cf-item .cf-n {
+  flex: 0 0 auto;
+  color: var(--ink-faint);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  overflow: visible;
+}
+.cf-all { font-weight: 600; }
+/* 浏览器「合并模式」下的小徽标：这一项压着几个版本。
+   跟 .cf-n 一样不参与收缩，否则长名字会把它挤没。 */
+.cf-item .cf-vers {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border-radius: 6px;
+  background: rgba(102, 204, 255, .18);
+  color: #2a7ea8;
+  font-size: 10.5px;
+  line-height: 15px;
+  overflow: visible;
+  cursor: help;
+}
+.cf-divider {
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--line);
+  border-radius: 0 0 6px 6px;
+  color: var(--ink-soft);
+}
+.cf-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+
+/* 自定义起止时间：只有选中「自定义」时才显示 */
+.cf-custom {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fafcfe;
+}
+/* 同 .cf-pop：display:flex 会盖掉 [hidden] 的 display:none，必须显式写 */
+.cf-custom[hidden] { display: none; }
+
+.cf-range { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-soft); }
+.cf-range > span { flex: 0 0 auto; }
+.cf-range input { flex: 1 1 auto; min-width: 0; padding: 4px 6px; font-size: 12px; }
+.cf-custom .hint { font-size: 11.5px; color: var(--ink-faint); line-height: 1.4; }
+
+/* ── 控件 ──
+   普通按钮不用近白底：浅蓝底 + 深蓝字，一眼能看出「这是个能点的」。 */
+button {
+  font: inherit;
+  cursor: pointer;
+  border-radius: 9px;
+  padding: 7px 14px;
+  border: 1px solid #a9dcf5;
+  background: #ddf2fd;
+  color: var(--accent-deep);
+  font-weight: 600;
+  transition: background .12s ease, border-color .12s ease, transform .04s ease;
+}
+button:hover { background: #c4e9fa; border-color: #83cdef; }
+button:active { transform: translateY(1px); }
+button:disabled { opacity: .5; cursor: not-allowed; }
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #08313f;
+  font-weight: 650;
+}
+button.primary:hover { background: #54c2f7; border-color: #54c2f7; }
+
+button.danger { color: var(--bad); border-color: #f0cbc7; background: #fdf3f2; }
+button.danger:hover { background: var(--bad-bg); }
+
+button.ghost { background: transparent; border-color: transparent; color: var(--ink-soft); }
+button.ghost:hover { background: #f0f5f9; border-color: var(--line); }
+/* 文字色用 --accent-deep 而不是 --accent：后者是 #66ccff 浅蓝，
+   当正文色对比度不够。浅蓝只适合做背景/边框。 */
+/* 「显示全部记录」：比 ghost 轻，但**必须**看得见 —— 它是唯一能让
+   「共 N 条 / 筛选后 M 条」两个数字相等的入口，下划线表出可点。
+   文字色用 --accent-deep 而不是 --accent：后者是 #66ccff 浅蓝，
+   当正文色对比度不够；浅蓝只适合做背景/边框。 */
+button.link-btn {
+    background: transparent; border: 1px solid transparent;
+    color: var(--accent-deep);
+    padding: 1px 8px; font-size: 12px; cursor: pointer; border-radius: 6px;
+    text-decoration: underline; text-underline-offset: 2px;
+}
+button.link-btn:hover { background: #eef6fb; }
+/* ★ flex 布局会盖掉 hidden（.pager 踩过这个坑）—— 显式写出来。 */
+button.link-btn[hidden] { display: none; }
+
+button.tiny {
+  padding: 3px 9px;
+  font-size: 12.5px;
+  border-radius: 7px;
+}
+
+input[type="text"], input[type="password"], input[type="search"],
+input[type="number"], input[type="date"], input[type="datetime-local"], select {
+  font: inherit;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+  color: var(--ink);
+  min-width: 0;
+}
+input:focus, select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(102, 204, 255, .28);
+}
+label.inline { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-soft); font-size: 13px; }
+
+/* ── 表格 ── */
+.table-wrap { overflow-x: auto; }
+
+table.grid { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+table.grid th, table.grid td {
+  padding: 9px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+table.grid thead th {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-faint);
+  background: #fbfdff;
+  position: sticky;
+  top: 0;
+}
+table.grid tbody tr:hover { background: #f8fbfe; }
+table.grid tbody tr:last-child td { border-bottom: none; }
+table.grid td.num, table.grid th.num { text-align: right; font-variant-numeric: tabular-nums; }
+table.grid td.acts, table.grid th.acts { text-align: right; }
+table.grid td.acts { display: flex; gap: 6px; justify-content: flex-end; }
+
+.id-cell { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; color: var(--ink-faint); }
+.label-cell { font-weight: 600; }
+.note-cell { display: block; font-weight: 400; color: var(--ink-faint); font-size: 12px; }
+
+.tag {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 99px;
+  font-size: 12px;
+  background: #eef4f9;
+  color: var(--ink-soft);
+  border: 1px solid var(--line);
+}
+.tag.on { background: var(--ok-bg); color: var(--ok); border-color: #c6e9d9; }
+.tag.off { background: var(--bad-bg); color: var(--bad); border-color: #f5c9c5; }
+.tag.exp { background: var(--warn-bg); color: var(--warn); border-color: #f0dcb0; }
+
+.empty { margin: 0; padding: 22px 16px; color: var(--ink-faint); text-align: center; font-size: 13px; }
+.foot-note { margin: 0; padding: 10px 16px; color: var(--ink-faint); font-size: 12px; border-top: 1px solid var(--line); }
+
+/* 翻页条。放在表格下面而不是卡片头里：翻页是「看第几屏」，和筛选是两件事 */
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 9px 16px;
+  border-top: 1px solid var(--line);
+  background: #fcfdfe;
+}
+.pager[hidden] { display: none; }          /* flex 会盖掉 hidden，必须显式写 */
+.pager .page-info {
+  min-width: 92px;
+  text-align: center;
+  color: var(--ink-faint);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+.pager button:disabled { opacity: .42; cursor: default; }
+
+/* 「自动 [30] 秒」「每页 [20] 条」两个自由输入的数字框。
+   用 <label> 包住输入框而不是并排两个 span：点文字也能聚焦，
+   键盘/读屏也才有一个说得清的名字（aria-label 是第二道保险）。 */
+.num-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+.num-field input {
+  width: 4.4em;              /* 两位数起、四位数放得下；再窄就只能看个位数 */
+  padding: 6px 8px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+/* 暂停中：把按钮压下去，别让人以为「自动还在跑」 */
+#usage-auto-toggle[aria-pressed="true"] {
+  background: var(--line);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* 列头面板里的「取不到可选值」提示 */
+.cf-empty {
+  margin: 4px 0 2px;
+  padding: 7px 9px;
+  border-radius: 7px;
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: 12px;
+}
+.cf-empty.bad { background: var(--bad-bg); color: var(--bad); }
+
+/* ── 对话框 ── */
+dialog {
+  border: none;
+  border-radius: 14px;
+  padding: 0;
+  box-shadow: 0 18px 50px rgba(15, 35, 60, .22);
+  max-width: 560px;
+  width: calc(100% - 40px);
+  max-height: 88vh;          /* 详情可能很长，别让对话框长到屏幕外面去 */
+  color: var(--ink);
+}
+/* 详情比表单宽：里面有一张访问记录表 */
+dialog.wide { max-width: 800px; }
+dialog::backdrop { background: rgba(20, 32, 46, .38); }
+
+/* 纵向 flex：内容滚动，底部的按钮始终看得见 */
+.dlg-form {
+  margin: 0;
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+  max-height: 88vh;
+}
+.dlg-form h3 { margin: 0 0 14px; font-size: 15px; font-weight: 650; flex: 0 0 auto; }
+.dlg-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;             /* 没有它，flex 子项不会收缩，overflow 也就不生效 */
+  overflow-y: auto;
+}
+.dlg-note {
+  margin: 12px 0 0;
+  padding: 9px 12px;
+  border-radius: 9px;
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: 12.5px;
+  white-space: pre-line;     /* 让 js 里的 \n 真的换行（口令错重输的提示用了两行） */
+  flex: 0 0 auto;
+}
+.dlg-note.bad { background: var(--bad-bg); color: var(--bad); }
+/* 对话框里的一排动作按钮（背景图：撤下 / 恢复 / 推送）。
+   放在 dlg-foot 里不行——那里的按钮是「关掉对话框」的语义，
+   而这些是「关掉并顺手做一件事」。 */
+.dlg-acts { display: flex; gap: 10px; flex-wrap: wrap; }
+.dlg-label { font-size: 12.5px; color: var(--ink-faint); margin: 14px 0 6px; }
+/* 背景图预览：定高 + object-fit，否则一张竖图会把对话框撑到顶不动 */
+.wb-prev { display: flex; flex-direction: column; gap: 8px; }
+.wb-shot { border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
+    background: #f7fafc; padding: 6px; }
+.wb-img { display: block; width: 100%; height: 190px; object-fit: contain;
+    border-radius: 4px; background: #fff; }
+.wb-shot .hint { margin: 6px 2px 0; }
+.dlg-acts button { flex: 0 0 auto; }
+/* 文件选择框：默认那个按钮在中文系统上只有「选择文件」四个字，
+   视觉上和旁边的动作按钮不是一个量级，统一一下。 */
+.dlg-acts + .field input[type="file"],
+.field input[type="file"] {
+    padding: 6px 8px;
+    font-size: 12.5px;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+}
+.dlg-foot { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; flex: 0 0 auto; }
+
+/* 详情对话框内部：键值表 + 分段标题 + 原始输出 + 迷你表 */
+.kv {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 14px;
+  align-items: baseline;
+}
+.kv-k { font-size: 12.5px; color: var(--ink-faint); white-space: nowrap; }
+.kv-v { font-size: 13.5px; word-break: break-all; }
+
+.dlg-sec { display: flex; flex-direction: column; gap: 6px; }
+.dlg-sec-title { font-size: 12.5px; font-weight: 650; color: var(--ink-soft); }
+
+.dlg-pre {
+  margin: 0;
+  padding: 12px 14px;
+  max-height: 220px;
+  overflow: auto;
+  border-radius: 10px;
+  background: #0f1b26;
+  color: #cfe3f0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.dlg-pre.bad { background: #2a1210; color: #ffd9d4; }
+
+.mini-wrap { max-height: 240px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
+table.grid.mini { font-size: 12.5px; }
+table.grid.mini th, table.grid.mini td { padding: 6px 10px; }
+/* 「说明」那列要能换行：否则一句中文会把它撑成一条长线，横向滚动条都救不回来 */
+table.grid.mini td.wrap-cell { white-space: normal; min-width: 200px; }
+/* 差异对话框里的「去推送」按钮，别贴着表格 */
+.dlg-sec > button { align-self: flex-start; margin-top: 4px; }
+
+.dlg-empty { margin: 0; padding: 8px 2px; color: var(--ink-faint); font-size: 12.5px; }
+.dlg-empty.bad { color: var(--bad); }
+
+.field { display: flex; flex-direction: column; gap: 5px; }
+.field > span { font-size: 12.5px; color: var(--ink-soft); }
+.field .hint { font-size: 12px; color: var(--ink-faint); }
+.row2 { display: flex; gap: 10px; }
+.row2 > * { flex: 1 1 0; }
+
+/* 明文密码：只显示这一次，所以给足视觉重量 */
+.secret {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 19px;
+  letter-spacing: .04em;
+  word-break: break-all;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: #0d2a38;
+  color: #d9f3ff;
+  text-align: center;
+  user-select: all;
+}
+
+/* ── 底部弹窗堆：页面所有提示的唯一出口（2026-11-01 收口）──
+   以前有三个面：底部居中的 toast、顶部的「已刷新」条、页面最底下一张不消失的
+   「命令输出」卡，各写一份 setTimeout。现在只有一种：底部居中堆叠（最新在下），
+   每条右上角一个 ×；短提示按长短自动收，命令输出不自动收。 */
+.toasts {
+  position: fixed;
+  left: 50%;
+  bottom: 26px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(680px, calc(100% - 40px));
+  z-index: 60;
+  pointer-events: none;   /* 堆里的空白处不挡下面的表格，卡片自己恢复点击 */
+}
+.toast {
+  position: relative;
+  pointer-events: auto;
+  padding: 11px 40px 11px 18px;
+  border-radius: 10px;
+  background: #10202c;
+  color: #eaf6ff;
+  font-size: 13px;
+  box-shadow: 0 10px 30px rgba(10, 25, 40, .3);
+}
+.toast.bad { background: #4a1512; color: #ffe2df; }
+.toast-text { white-space: pre-wrap; word-break: break-word; }
+.toast-text.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+/* 命令原始输出：可能几十行，限高内部滚，别把整屏顶掉 */
+.toast.out .toast-text { max-height: 320px; overflow: auto; }
+.toast-head { font-weight: 600; margin-bottom: 6px; }
+.toast-x {
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: inherit;
+  font-size: 17px;
+  font-weight: 400;
+  line-height: 1;
+  cursor: pointer;
+}
+.toast-x:hover { background: rgba(255, 255, 255, .16); }
+
+@media (max-width: 720px) {
+  .topbar { flex-wrap: wrap; gap: 10px; }
+  .chips { margin-left: 0; order: 3; width: 100%; }
+  main { padding: 14px 12px 40px; }
+  .search { max-width: none; }
+}
+
+/* ── 推送背景图时的「更新到哪些端」复选框组（2026-10-17）──
+   web 端必选（灰着但勾着），mac / win 可取消，默认三个全勾。 */
+.cf-box {
+  margin: 6px 0 2px;
+  padding: 2px 4px;
+  border-radius: 8px;
+  background: #f7fafc;
+}
+.cf-box .cf-divider {
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+.cf-item.is-static {
+  color: var(--ink-soft);
+  cursor: default;
+}
+.cf-item.is-static:hover { background: none; }
+.cf-item.is-static input { cursor: not-allowed; }
+
+/* ── 上传进度条（对话框底部，2026-10-18）──
+   只在推送背景图时出现。显示「已传 / 总大小（百分比，一位小数）」。 */
+.page-prog {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 40;
+  background: rgba(255, 255, 255, .97);
+  border-top: 1px solid var(--line);
+  box-shadow: 0 -2px 10px rgba(30, 60, 90, .08);
+}
+.page-prog-inner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 9px 16px 10px;
+}
+.page-prog-label {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--ink);
+}
+.page-prog .prog-bar {
+  flex: 1 1 auto;
+}
+.page-prog .prog-txt {
+  flex: 0 0 auto;
+  margin: 0;
+  min-width: 210px;      /* 数字跳动时不推开进度条 */
+  text-align: right;
+}
+.prog-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: #e3ecf3;
+  overflow: hidden;
+}
+.prog-fill {
+  height: 100%;
+  width: 0;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #66ccff, #2a9fd6);
+  transition: width .12s linear;   /* 平滑一点，别一跳一跳 */
+}
+.prog-txt {
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;   /* 数字等宽，滚动时不抖 */
+  text-align: right;
+}
+
+/* ── 图标裁剪器（2026-10-18）────────────────────────────────────
+   左侧画布：背景图 + 可拖动的正方形选框；右侧：实时预览。
+   选框坐标全部按**原图像素**存，显示时乘 scale —— 这样缩放窗口后
+   裁剪结果仍然精确（按屏幕像素存会随缩放漂移）。 */
+.crop-dlg {
+  width: min(1040px, 94vw);
+  max-width: none;
+  padding: 0;
+  border: none;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 18px 60px rgba(20, 45, 70, .28);
+}
+.crop-dlg::backdrop { background: rgba(18, 34, 50, .45); }
+.crop-head { padding: 16px 20px 8px; }
+.crop-head h3 { margin: 0 0 5px; font-size: 15.5px; color: var(--ink); }
+.crop-sub { margin: 0; font-size: 12px; line-height: 1.6; color: var(--ink-soft); }
+.crop-sub b { color: var(--ink); font-weight: 600; }
+
+.crop-main {
+  display: flex;
+  gap: 14px;
+  padding: 6px 20px 12px;
+  align-items: flex-start;
+}
+/* 画布区：让 img 自己撑开，选框相对它绝对定位 */
+.crop-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  background:
+    linear-gradient(45deg, #eef3f7 25%, transparent 25%, transparent 75%, #eef3f7 75%) 0 0/16px 16px,
+    linear-gradient(45deg, #eef3f7 25%, transparent 25%, transparent 75%, #eef3f7 75%) 8px 8px/16px 16px,
+    #fafcfd;
+  border-radius: 8px;
+  overflow: hidden;
+  line-height: 0;          /* 消掉 img 底部的行内间隙 */
+  user-select: none;
+}
+.crop-stage img {
+  display: block;
+  width: 100%;
+  height: auto;
+  pointer-events: none;    /* 命中判定全交给选框，别让 img 抢事件 */
+}
+.crop-box {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 9999px rgba(12, 26, 38, .55);  /* 框外压暗：一眼看清裁哪 */
+  cursor: move;
+}
+.crop-hd {
+  position: absolute;
+  width: 12px; height: 12px;
+  background: #fff;
+  border: 1px solid #2a9fd6;
+  border-radius: 3px;
+  box-sizing: border-box;
+}
+.crop-hd[data-h="nw"] { left: -7px;  top: -7px;    cursor: nwse-resize; }
+.crop-hd[data-h="ne"] { right: -7px; top: -7px;    cursor: nesw-resize; }
+.crop-hd[data-h="sw"] { left: -7px;  bottom: -7px; cursor: nesw-resize; }
+.crop-hd[data-h="se"] { right: -7px; bottom: -7px; cursor: nwse-resize; }
+.crop-hd[data-h="n"]  { left: 50%; top: -7px;    transform: translateX(-50%); cursor: ns-resize; }
+.crop-hd[data-h="s"]  { left: 50%; bottom: -7px; transform: translateX(-50%); cursor: ns-resize; }
+.crop-hd[data-h="w"]  { left: -7px; top: 50%;    transform: translateY(-50%); cursor: ew-resize; }
+.crop-hd[data-h="e"]  { right: -7px; top: 50%;   transform: translateY(-50%); cursor: ew-resize; }
+
+.crop-side { flex: 0 0 190px; }
+.crop-side-title {
+  font-size: 12px; color: var(--ink-soft); margin-bottom: 7px;
+}
+.crop-prev {
+  position: relative;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #f1f5f8;
+  box-shadow: inset 0 0 0 1px var(--line);
+  /* 正方形，尺寸由 JS 按 256 那档设；这里给个兜底 */
+  width: 160px; height: 160px;
+  background-size: cover;
+  background-position: center;
+}
+.crop-prev-row { display: flex; gap: 8px; margin-top: 8px; }
+.crop-prev.sm { width: 48px; height: 48px; border-radius: 7px; }
+.crop-prev-tag {
+  position: absolute;
+  right: 3px; bottom: 2px;
+  font-size: 9px;
+  color: #fff;
+  background: rgba(0, 0, 0, .42);
+  border-radius: 3px;
+  padding: 0 3px;
+  line-height: 12px;
+}
+.crop-prev.sm .crop-prev-tag { display: none; }
+.crop-info {
+  margin-top: 10px;
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+.crop-info b { color: var(--ink); }
+.crop-info .warn { color: #b4562a; }
+
+.crop-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 20px 15px;
+  border-top: 1px solid var(--line);
+}
+.crop-spacer { flex: 1 1 auto; }
+
+/* Windows 图标那句提醒：它是个容易误解的点，不能和普通说明长得一样 */
+.dlg-note.tip-warn {
+  color: #8a4a1e;
+  background: #fdf4ec;
+  border-left: 2px solid #e0a468;
+  border-radius: 0 6px 6px 0;
+  padding: 6px 9px;
+}
+
+/* Windows 图标那句提醒：它是个容易误解的点，不能和普通说明长得一样 */
+.dlg-note.tip-warn {
+  color: #8a4a1e;
+  background: #fdf4ec;
+  border-left: 2px solid #e0a468;
+  border-radius: 0 6px 6px 0;
+  padding: 6px 9px;
+}
+
+/* ── 种子工具箱（弹窗）── */
+.seed-dlg { max-width: 720px; padding: 20px 22px; box-sizing: border-box; overflow: auto; }
+.seed-dlg .card-head { margin-bottom: 10px; }
+.seed-note { margin: 0 0 10px; }
+#seed-in {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+#seed-key {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 8px;
+  font-size: 12.5px;
+}
+.seed-actions { display: flex; gap: 8px; margin: 10px 0; }
+.seed-out {
+  margin: 0;
+  padding: 14px 16px;
+  max-height: 340px;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #0f1b26;
+  color: #cfe3f0;
+  user-select: all;
+}
+.seed-out.bad { background: #2a1210; color: #ffd9d4; }

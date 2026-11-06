@@ -1,0 +1,48 @@
+[Unit]
+Description=cmsgate — 复数扫雷网页版访问闸门的鉴权服务
+After=network.target
+# 只被 nginx 从回环调用，不对外监听
+
+[Service]
+Type=simple
+User=cmsgate
+Group=cmsgate
+
+# ProtectSystem=strict 下 /opt 是只读的，CPython 尝试写 __pycache__ 会失败 ——
+# 必须禁掉字节码写入（-B 与这个环境变量是同一件事，写了双保险）
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+
+ExecStart=/usr/bin/python3 -B /opt/cmsgate/authd.py --listen 127.0.0.1:8090 --state /var/lib/cmsgate --session-ttl 86400
+
+Restart=always
+RestartSec=2
+
+# ---- 方案 §5.3 要求的 systemd 沙箱 ----
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+# 只放开数据目录，其余文件系统只读
+ReadWritePaths=/var/lib/cmsgate
+
+# ---- 追加加固（本服务只做回环 HTTP，不需要任何特权）----
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

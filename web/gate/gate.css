@@ -1,0 +1,192 @@
+/* 复数扫雷：访问密码页样式。
+   配色与字体与游戏本体保持一致（见 web/ts/ui.ts 的调色板与 fontFor()）。
+   注意：本站 CSP 为 style-src 'self'，禁止内联样式，所以全部写在这里。
+
+   ★ 2026-10-20 整页配色以 66ccff（洛天依应援色、也是项目主色 kCovered）为核心重做：
+     底色 / 渐变 / 面板 / 文字 / 按钮全部收进 66ccff 家族 ——
+     亮部 #bfeaff → 主色 #66ccff → 中段 #3f9fd6 → 深处 #245e82，
+     文字用深青墨 #1c4a66 / #2c6f96 保证浅面板上的对比度，错误仍是 #d63031。
+     仍是纯 CSS 渐变：零外部请求、匿名可看、不碰未授权背景图（版权约束不变）。 */
+
+@font-face {
+  font-family: 'IBM Plex Serif';
+  /* 与 style.css 同源，复用同一份子集化字体 */
+  src: url('/assets/ibmplex-ascii.woff2') format('woff2'),
+       url('/assets/IBMPlexSerif-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+}
+
+body {
+  /* 66ccff 家族中段，作为渐变之外的兜底色 */
+  background-color: #3f9fd6;
+  /* 两层叠出「左上透光 + 向右下压深」，半透明面板才浮得起来。
+     径向高光偏白、线性主体走 66ccff → 青蓝。 */
+  background-image:
+    radial-gradient(1100px 620px at 22% 12%, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0) 62%),
+    linear-gradient(168deg, #bfeaff 0%, #66ccff 34%, #3f9fd6 68%, #245e82 100%);
+  background-repeat: no-repeat;
+
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+
+  font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+               "Noto Sans CJK SC", sans-serif;
+  color: #1c4a66;                       /* 深青墨，替代旧 kInk #2c3e50 */
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 星光层：铺满视口、盖在渐变上、面板之下；必须 pointer-events:none 否则挡表单。 */
+#fx {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.gate-panel {
+  position: relative;                   /* 抬到星光画布之上 */
+  z-index: 1;
+  width: 100%;
+  max-width: 368px;
+  padding: 30px 28px 22px;
+  border: 1px solid rgba(102, 204, 255, 0.85);   /* 66ccff 描边 */
+  border-radius: 12px;
+  /* 半透明白面板叠在 66ccff 渐变上，复刻游戏内 bgAlpha≈140/255≈0.55 的覆盖观感 */
+  background: rgba(255, 255, 255, 0.58);
+  box-shadow: 0 8px 34px rgba(20, 74, 106, 0.45);
+  backdrop-filter: blur(3px);
+}
+
+h1 {
+  margin: 0 0 2px;
+  font-family: 'IBM Plex Serif', Georgia, "Times New Roman", serif;
+  font-size: 19px;
+  font-weight: 400;
+  letter-spacing: 0.055em;
+  text-align: center;
+  color: #1c4a66;
+}
+
+.sub {
+  margin: 0 0 22px;
+  text-align: center;
+  font-size: 13px;
+  color: #2c6f96;                        /* 66ccff 深调 */
+}
+
+.lbl {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+  color: #2c6f96;
+}
+
+.pwrow {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+/* 选择器用 #pw 而不是 input[type="password"]：「显示」按钮会把 type 切成 text，
+   用属性选择器的话一切换样式就全丢了。 */
+#pw {
+  flex: 1 1 auto;
+  min-width: 0;
+  /* 16px：低于此值 iOS Safari 聚焦时会自动放大页面 */
+  font-size: 16px;
+  line-height: 1.4;
+  padding: 10px 12px;
+  color: #1c4a66;
+  background: #fff;                      /* 输入区保持纯白，密码可读 */
+  border: 1px solid #9fd0ea;             /* 浅 66ccff 描边 */
+  border-radius: 7px;
+  font-family: inherit;
+}
+
+#pw:focus {
+  outline: none;
+  border-color: #66ccff;                 /* 项目主色 kCovered */
+  box-shadow: 0 0 0 3px rgba(102, 204, 255, 0.40);
+}
+
+.reveal {
+  flex: 0 0 auto;
+  width: 62px;
+  margin-top: 0;                         /* 覆盖下面 button 的 14px，与输入框同高 */
+  min-height: 0;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+
+button {
+  display: block;
+  width: 100%;
+  margin-top: 14px;
+  /* 44px：移动端可点面积下限 */
+  min-height: 44px;
+  font-size: 15px;
+  letter-spacing: 0.18em;
+  font-family: inherit;
+  color: #123b52;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid #9fd0ea;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+}
+
+button:hover { border-color: #66ccff; background: rgba(102, 204, 255, 0.16); }
+button:focus-visible { outline: 2px solid #2c97d4; outline-offset: 2px; }
+button:active { background: #2c97d4; border-color: #2c97d4; color: #fff; }  /* 66ccff 按下压深 */
+button[disabled] { opacity: 0.55; cursor: default; }
+
+.err {
+  margin: 10px 0 0;
+  min-height: 18px;
+  font-size: 13px;
+  color: #d63031;                        /* kBadMark 错误红保留 */
+}
+
+.warn {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #2c6f96;
+}
+
+.foot {
+  margin: 18px 0 0;
+  text-align: center;
+  font-size: 12px;
+  color: #2c6f96;
+}
+.foot a {
+  text-decoration: none;
+  color: inherit;
+}
+.foot a.ga img {
+  width: 14px;
+  height: 14px;
+  vertical-align: -2px;
+  margin-right: 4px;
+}
+
+/* 窄屏收紧内边距 */
+@media (max-width: 420px) {
+  .gate-panel { padding: 24px 20px 18px; }
+  h1 { font-size: 17px; }
+}

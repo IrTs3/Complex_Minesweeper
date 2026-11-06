@@ -1,0 +1,560 @@
+/* ctlui 样式：整体沿用 cmsui（tools/gateui/app.css）的设计语言——
+   浅色克制、#66ccff 主色、卡片 + card-head + table.grid、原生 dialog。
+   这里只放 cmsui 用到的那部分子集 + ctlui 自己的几个布局类，
+   刻意不用内联样式（CSP 里 style-src 是 'self'）。 */
+
+:root {
+  --ink: #22303f;
+  --ink-soft: #5b6b7c;
+  --ink-faint: #8a99a8;
+  --line: #e2e9f0;
+  --bg: #eef2f6;
+  --card: #ffffff;
+  --accent: #66ccff;
+  --accent-deep: #0a7ea4;
+  --ok: #13805b;
+  --ok-bg: #e6f7ef;
+  --warn: #8a5a00;
+  --warn-bg: #fff5e0;
+  --bad: #b3261e;
+  --bad-bg: #fdecea;
+  --radius: 12px;
+  --shadow: 0 6px 22px rgba(20, 40, 70, .08);
+}
+
+* { box-sizing: border-box; }
+
+/* min-height 而不是 height：height:100% 把 body 盒子钉在一屏高，
+   而 sticky 顶栏只能在自己包含块（body）里粘——出了那一屏就被推走。 */
+html, body { min-height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 14px/1.6 -apple-system, BlinkMacSystemFont, "PingFang SC",
+        "Microsoft YaHei", "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── 顶栏 ── */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 22px;
+  background: var(--card);
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+.brand { display: flex; align-items: baseline; gap: 10px; }
+.brand h1 { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: .01em; }
+.brand .sub { font-size: 12px; color: var(--ink-faint); }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 99px;
+  font-size: 12px;
+  line-height: 1.7;
+  background: #f2f6fa;
+  color: var(--ink-soft);
+  border: 1px solid var(--line);
+  white-space: nowrap;
+}
+.chip b { font-weight: 650; color: var(--ink); }
+.chip.ok { background: var(--ok-bg); border-color: #c6e9d9; color: var(--ok); }
+.chip.warn { background: var(--warn-bg); border-color: #f0dcb0; color: var(--warn); }
+/* 顶栏右侧的刷新功能区（从合计卡挪出来的，刷新本来就是全页的事） */
+.top-acts { margin-left: 12px; display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+
+/* ── 主体与卡片 ── */
+main { max-width: 1280px; margin: 0 auto; padding: 18px 22px 48px; }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  margin-bottom: 18px;
+  overflow: hidden;
+}
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  background: #fafcfe;
+}
+.card-head h2 { margin: 0; font-size: 14px; font-weight: 650; }
+.head-acts { margin-left: auto; display: flex; align-items: center; gap: 10px; flex: 0 0 auto; flex-wrap: wrap; }
+.muted { color: var(--ink-faint); font-size: 12.5px; }
+.card-head > .muted {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.card-body { padding: 14px 16px 16px; }
+
+/* 三个操作卡并排放（窄屏自动落成单列） */
+.op-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+.op-grid .card { margin-bottom: 0; }
+@media (max-width: 820px) { .op-grid .card { margin-bottom: 18px; } }
+
+/* 调度状态卡：四个键值格 */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px 20px;
+  padding: 14px 16px 16px;
+}
+.stat { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.stat-k { font-size: 12px; color: var(--ink-faint); }
+.stat-v { font-size: 14px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.seedrow { display: inline-flex; align-items: center; gap: 6px; }
+.seedrow input { width: 4.5em; text-align: right; font-variant-numeric: tabular-nums; }
+.seedrow #c-seed { width: 11.5em; }   /* uint32 上限 4294967295，10 位要放得下 */
+
+/* ── 控件 ──
+   普通按钮比 cmsui 的近白底更显眼：浅蓝底 + 深蓝字，
+   一眼能看出「这是个能点的」，不用猜哪里藏了东西。 */
+button {
+  font: inherit;
+  cursor: pointer;
+  border-radius: 9px;
+  padding: 7px 14px;
+  border: 1px solid #a9dcf5;
+  background: #ddf2fd;
+  color: var(--accent-deep);
+  font-weight: 600;
+  transition: background .12s ease, border-color .12s ease, transform .04s ease;
+}
+button:hover { background: #c4e9fa; border-color: #83cdef; }
+button:active { transform: translateY(1px); }
+button:disabled { opacity: .5; cursor: not-allowed; }
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #08313f;
+  font-weight: 650;
+}
+button.primary:hover { background: #54c2f7; border-color: #54c2f7; }
+button.danger { color: var(--bad); border-color: #f0cbc7; background: #fdf3f2; }
+button.danger:hover { background: var(--bad-bg); }
+button.ghost { background: transparent; border-color: transparent; color: var(--ink-soft); }
+button.ghost:hover { background: #f0f5f9; border-color: var(--line); }
+button.tiny { padding: 3px 9px; font-size: 12.5px; border-radius: 7px; }
+/* 暂停中：把按钮压下去，别让人以为「自动还在跑」 */
+#btn-toggle-auto[aria-pressed="false"] {
+  background: var(--line);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+input[type="text"], input[type="password"], input[type="search"],
+input[type="number"], select {
+  font: inherit;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+  color: var(--ink);
+  min-width: 0;
+}
+input:focus, select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(102, 204, 255, .28);
+}
+
+.field { display: flex; flex-direction: column; gap: 5px; }
+.field > span { font-size: 12.5px; color: var(--ink-soft); }
+label.inline { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-soft); font-size: 13px; }
+
+/* 操作卡里的一行表单控件 */
+.frow { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; margin-bottom: 12px; }
+.frow:last-child { margin-bottom: 0; }
+.frow .field { min-width: 0; }
+.frow .grow { flex: 1 1 220px; }
+.frow .bc { width: 5.5em; }
+.acts-row { display: flex; gap: 10px; }
+
+/* 规格旁边的密度读数 */
+.density {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--accent-deep);
+  font-variant-numeric: tabular-nums;
+  padding-bottom: 8px;
+  white-space: nowrap;
+}
+/* 实时判词：红=必被拦（附原因在 title），橙=能交但会弹确认 */
+.density.illegal { color: var(--bad); }
+.density.warn { color: #e6b84c; }
+
+/* 「自动 [5] 秒」数字框（cmsui 同款） */
+.num-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+.num-field input {
+  width: 4.4em;
+  padding: 6px 8px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 表格 ── */
+.table-wrap { overflow-x: auto; }
+table.grid { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+table.grid th, table.grid td {
+  padding: 9px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+table.grid thead th {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-faint);
+  background: #fbfdff;
+}
+table.grid tbody tr:hover { background: #f8fbfe; }
+table.grid tbody tr:last-child td { border-bottom: none; }
+table.grid td.num, table.grid th.num { text-align: right; font-variant-numeric: tabular-nums; }
+td.id-cell, .id-cell {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  color: var(--ink-faint);
+}
+td.win-hi { color: var(--ok); font-weight: 650; }
+td.invalid { color: var(--ink-faint); text-decoration: line-through; }
+/* 离线行：有进度但 5 分钟没刷新，疑似客户端挂了 */
+table.grid tr.offline td { background: var(--bad-bg); }
+table.grid tr.offline:hover td { background: #fbdcd9; }
+/* 勾选框并进任务列、紧贴任务名（随叶子缩进走）；表头全选框对齐一级叶子 */
+.kick-head input { margin-left: 28px; }
+#t-inprog .kick-chk { vertical-align: middle; margin-right: 6px; }
+.empty { margin: 0; padding: 22px 16px; color: var(--ink-faint); text-align: center; font-size: 13px; }
+.foot-note { margin: 0; padding: 10px 16px; color: var(--ink-faint); font-size: 12px; border-top: 1px solid var(--line); }
+
+/* ── 最近结果分页条（cmsui 同款） ── */
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 9px 16px;
+  border-top: 1px solid var(--line);
+  background: #fcfdfe;
+}
+.pager[hidden] { display: none; }          /* flex 会盖掉 hidden，必须显式写 */
+.pager button:disabled { opacity: .42; cursor: default; }
+
+/* ── 进行中：IP/设备折叠树（单击展开式，一级黄 / 二级蓝区分层级，整行染色） ── */
+tr.group-row { cursor: pointer; }
+tr.group-row .caret {
+  display: inline-block;
+  width: 1.1em;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--ink-soft);
+  font-weight: 700;
+}
+tr.group-row.ip td { background: #fff3d6; font-weight: 650; }
+tr.group-row.ip:hover td { background: #ffedc2; }
+/* 单设备组挂在 IP 下面那行的机器名：小一号、细一点，别跟 IP 抢视觉 */
+tr.group-row.ip .grp-dev { font-size: 12px; font-weight: 500; line-height: 1.4; }
+tr.group-row.device td { background: #e7f3fd; font-weight: 600; }
+tr.group-row.device:hover td { background: #dcecfa; }
+/* 叶子缩进直接作用在任务列（第 1 列）：勾选框贴着任务名一起缩进，
+   同一层级的复选框和任务名天然对齐 */
+tr.leaf-under-group td:first-child { padding-left: 28px; }
+tr.leaf-under-device td:first-child { padding-left: 44px; }
+/* 离线两级：1 分钟没上报浅红，5 分钟深红（整行染，含勾选列） */
+table.grid tr.offline td { background: #fdeae5; }
+table.grid tr.offline:hover td { background: #fcded7; }
+table.grid tr.offline-deep td { background: #f8cfc8; }
+table.grid tr.offline-deep:hover td { background: #f4c0b8; }
+/* 未上报进度：超过服务器 15 分钟宽限（到点收回重发）整行浅黄，低于离线两级 */
+table.grid tr.noreport td { background: var(--warn-bg); }
+table.grid tr.noreport:hover td { background: #f7e9c2; }
+/* 勾选中的行：闪烁红底。动画声明压过普通 background（离线深/浅红、分组行
+   底色都让位）——用户口径：最后变成闪烁的红色。深↔浅红循环一眼可辨。 */
+@keyframes picked-flash {
+  0%, 100% { background: #f8cfc8; }
+  50%      { background: #fdeae5; }
+}
+table.grid tr.picked td { animation: picked-flash 1.2s infinite; }
+/* 版本落后（不是已发布最新那份）：版本号浅蓝闪。求解器/客户端各自独立判。
+   优先级低于死人提醒：行级红（offline / offline-deep / picked）在时 JS 不加这个类，
+   蓝闪只出现在「还活着但包旧」的行上，两种信号不叠在同一行。 */
+@keyframes ver-old-flash {
+  0%, 100% { background: transparent; }
+  50%      { background: #bfe0ff; }
+}
+table.grid code.ver-old { animation: ver-old-flash 1.6s ease-in-out infinite; }
+/* 勾选框并进种子列（跟进行中的任务列同款）；勾选只在队列弹窗里，卡面表格只读 */
+#t-queue-full .qdel-chk { vertical-align: middle; margin-right: 6px; }
+/* 队列冷却倒计时：解冻前领不走，用告警色但不如离线那么重 */
+td .cool-wait { color: var(--warn); font-weight: 600; }
+/* 上次通信：超过 30 秒没回传就红字 */
+td .comm-late { color: var(--bad); font-weight: 600; }
+
+/* ── 列筛选浮层（cmsui gateui 同款）：挂在列头 ▾ 上的 fixed 卡片。
+     #cf-pop / #queue-pop 必须分别放在 #hist-dlg / #queue-dlg 内部 —— dialog 在
+     top layer 渲染，body 上的 fixed 元素会被压在弹窗底下看不见；
+     主页面合计卡用 #agg-pop，挂在 body 上。 ── */
+.cf-btn {
+  margin-left: 4px;
+  padding: 0 4px;
+  border: none;
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 11px;
+  line-height: 1.5;
+  border-radius: 5px;
+}
+.cf-btn:hover { background: #e8f1f8; color: var(--ink-soft); border-color: transparent; }
+.cf-btn.on {
+  color: var(--accent-deep);
+  background: rgba(102, 204, 255, .24);
+  font-weight: 700;
+}
+th.cf-active { color: var(--accent-deep); }
+
+.cf-pop {
+  position: fixed;
+  z-index: 90;
+  width: 248px;
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 14px 38px rgba(15, 35, 60, .18);
+  font-size: 13px;
+}
+/* display:flex 会盖掉 [hidden] 的 display:none，必须显式写 */
+.cf-pop[hidden] { display: none; }
+
+.cf-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--ink-soft);
+}
+.cf-x {
+  padding: 0 5px;
+  border: none;
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 15px;
+  line-height: 1;
+}
+.cf-x:hover { color: var(--bad); background: transparent; border-color: transparent; }
+
+.cf-search { width: 100%; padding: 5px 8px; font-size: 12.5px; }
+
+.cf-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 34vh;
+  overflow-y: auto;
+}
+.cf-list[hidden] { display: none; }
+
+.cf-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--ink);
+}
+.cf-item:hover { background: #f2f7fb; }
+.cf-item > span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cf-item .cf-n {
+  flex: 0 0 auto;
+  color: var(--ink-faint);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  overflow: visible;
+}
+.cf-all { font-weight: 600; }
+.cf-divider {
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--line);
+  border-radius: 0 0 6px 6px;
+  color: var(--ink-soft);
+}
+.cf-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+
+/* 区间/自定义时间：标签 + 输入框一行 */
+.cf-range { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-soft); }
+.cf-range > span { flex: 0 0 auto; }
+.cf-range input { flex: 1 1 auto; min-width: 0; padding: 4px 6px; font-size: 12px; }
+input.bad-range {
+  border-color: var(--bad);
+  box-shadow: 0 0 0 3px rgba(179, 38, 30, .15);
+}
+.cf-hint { font-size: 11.5px; color: var(--ink-faint); line-height: 1.4; }
+
+/* ── 对话框（原生 <dialog>，cmsui 同款） ── */
+dialog {
+  border: none;
+  border-radius: 14px;
+  padding: 0;
+  box-shadow: 0 18px 50px rgba(15, 35, 60, .22);
+  max-width: 560px;
+  width: calc(100% - 40px);
+  color: var(--ink);
+}
+dialog::backdrop { background: rgba(20, 32, 46, .38); }
+
+/* ── 三个大弹窗（历史记录 / 优先队列 / 版本历史）：近全屏 + 内部纵向排布。
+     尺寸与排布只写一份——以前 ver-dlg 单独「小一号」，20 多行版本挤成一团。 ── */
+#hist-dlg, #queue-dlg, #ver-dlg {
+  width: calc(100vw - 28px);
+  height: calc(100vh - 28px);
+  max-width: none;
+  max-height: none;
+  display: flex;            /* 仅在 [open] 态生效 */
+  flex-direction: column;
+  overflow: hidden;
+}
+#hist-dlg:not([open]), #queue-dlg:not([open]), #ver-dlg:not([open]) { display: none; }
+#hist-dlg > .card-head, #queue-dlg > .card-head, #ver-dlg > .card-head {
+  flex: none; padding: 14px 18px; border-bottom: 1px solid var(--line);
+}
+#hist-dlg > .table-wrap, #queue-dlg > .table-wrap, #ver-dlg > .table-wrap {
+  flex: 1 1 auto; overflow: auto;
+}
+/* 表头跟着冻结：弹窗里翻到第 20 行不用再回头找列名 */
+#hist-dlg thead th, #queue-dlg thead th, #ver-dlg thead th {
+  position: sticky; top: 0; z-index: 1;
+}
+#hist-dlg > .empty, #queue-dlg > .empty, #ver-dlg > .empty,
+#hist-dlg > .pager, #queue-dlg > .pager, #ver-dlg > .pager,
+#hist-dlg > .foot-note, #queue-dlg > .foot-note, #ver-dlg > .foot-note { flex: none; }
+.dlg-form {
+  margin: 0;
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+}
+.dlg-form h3 { margin: 0 0 14px; font-size: 15px; font-weight: 650; }
+.dlg-body { display: flex; flex-direction: column; gap: 12px; }
+.dlg-note {
+  margin: 0;
+  padding: 9px 12px;
+  border-radius: 9px;
+  font-size: 12.5px;
+  white-space: pre-line;
+}
+.dlg-note.bad { background: var(--bad-bg); color: var(--bad); }
+.dlg-foot { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+#dlg-pw { width: 100%; }
+
+/* ── toast ── */
+/* ── 源码已改未重启的红色提醒（cmsui 同款口径） ── */
+.stale-banner {
+  margin: 0 0 14px;
+  padding: 10px 16px;
+  border: 1px solid #f3c4bf;
+  border-radius: 10px;
+  background: var(--bad-bg);
+  color: var(--bad);
+  font-weight: 650;
+  font-size: 13.5px;
+}
+.stale-banner[hidden] { display: none; }
+
+/* 番茄钟休息段的整宽黄条：挂在「优先队列」卡头下面，因为盯着队列的人看的是这张卡，
+   而那一行小灰字（#pomo-state）埋在「队列与结果」的表单里，扫一眼根本看不见。 */
+.rest-banner {
+  margin: 0 18px 12px;
+  padding: 9px 14px;
+  border: 1px solid #f0dcb0;
+  border-radius: 10px;
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-weight: 650;
+  font-size: 13px;
+}
+.rest-banner[hidden] { display: none; }
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 26px;
+  transform: translateX(-50%);
+  max-width: min(680px, calc(100% - 40px));
+  padding: 11px 18px;  border-radius: 10px;
+  background: #10202c;
+  color: #eaf6ff;
+  font-size: 13px;
+  box-shadow: 0 10px 30px rgba(10, 25, 40, .3);
+  z-index: 60;
+  white-space: pre-wrap;
+}
+.toast.bad { background: #4a1512; color: #ffe2df; }
+.toast.ok { background: #0f3d2e; color: #dcf5e9; }
+
+@media (max-width: 720px) {
+  .topbar { flex-wrap: wrap; gap: 10px; }
+  .chips { margin-left: 0; order: 3; width: 100%; }
+  main { padding: 14px 12px 40px; }
+}
+
+/* ── 求解器版本卡：三个口径各一行 + 历史表高亮工作区版 ── */
+.solver-line {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px;
+  margin: 0; padding: 0 16px; font-size: 14px;
+}
+.solver-line:first-of-type { padding-top: 12px; }
+.solver-line + .solver-line { margin-top: 4px; }
+.solver-line:last-of-type { padding-bottom: 12px; }
+.solver-scope {
+  flex: 0 0 4.5em; color: var(--ink-soft); font-weight: 600;
+  border-bottom: 1px dotted var(--line); cursor: help;
+}
+.solver-cur { margin: 0; padding: 12px 16px; font-size: 14px; }
+table.grid code, .solver-line code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  background: #eef2f7; border-radius: 6px; padding: 1px 7px; font-size: 13px;
+}
+tr.solver-cur-row td { background: #e7f7ec; }
+tr.solver-cur-row:hover td { background: #dcf1e3; }

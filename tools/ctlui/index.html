@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>跑分调度管理 · ctlui</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <h1>ctlui</h1>
+    <span class="sub">跑分调度管理 · 本地界面</span>
+  </div>
+  <div class="chips">
+    <span class="chip" id="chip-state">…</span>
+    <span class="chip" id="chip-counts">…</span>
+  </div>
+  <div class="top-acts">
+    <button type="button" class="ghost" id="btn-refresh" title="立刻从服务器拉一份最新状态">立即刷新</button>
+    <button type="button" class="ghost" id="btn-toggle-auto" aria-pressed="true"
+            title="暂停后就不再自动拉了；手动「立即刷新」随时可用">⏸ 暂停自动刷新</button>
+    <label class="num-field" for="refresh-interval">
+      <span>自动</span>
+      <input type="number" id="refresh-interval" min="1" max="600" step="1" value="15"
+             inputmode="numeric" aria-label="自动刷新间隔（秒）">
+      <span>秒</span>
+    </label>
+  </div>
+</header>
+
+<main>
+  <p class="stale-banner" id="stale-banner" hidden
+     title="两种「你看到的是旧的」：ctl_ui.py 被 Python 载入内存，改完必须重启进程；前端三件套每次请求现读盘，但你浏览器里跑的是打开那一刻的那份，要重新加载页面。">
+    ⚠ 代码已更新</p>
+  <section class="card">
+    <div class="card-head">
+      <h2>调度状态</h2>
+      <span class="muted" id="muted-state">改完会立刻重新发放，进行中的任务不受影响</span>
+    </div>
+    <div class="stat-grid">
+      <div class="stat"><span class="stat-k">默认任务流</span><b class="stat-v" id="c-default">—</b></div>
+      <div class="stat"><span class="stat-k">下一个种子</span>
+        <span class="stat-v seedrow">
+          <input type="number" id="c-seed" min="1" max="4294967295" inputmode="numeric" aria-label="下一个种子">
+          <button type="button" class="tiny" id="btn-seed">改</button>
+        </span></div>
+      <div class="stat"><span class="stat-k">租约超时</span>
+        <span class="stat-v seedrow">
+          <input type="number" id="lease-h" min="0" max="168" inputmode="numeric" aria-label="租约小时">h
+          <input type="number" id="lease-m" min="0" max="59" inputmode="numeric" aria-label="租约分钟">m
+          <button type="button" class="tiny" id="btn-lease">改</button>
+        </span></div>
+      <div class="stat"><span class="stat-k">队列 / 进行中 / 完成</span><b class="stat-v" id="c-counts">—</b></div>
+      <div class="stat"><span class="stat-k" title="按墙上时钟算的全局节拍：休息段不发新任务，正在跑的那单在两局之间睡到这一段结束">发货节拍</span>
+        <span class="chip ok" id="c-pomo">—</span></div>
+    </div>
+  </section>
+
+  <div class="op-grid">
+    <section class="card">
+      <div class="card-head"><h2>插队任务</h2><span class="muted">优先于默认流发放</span></div>
+      <div class="card-body">
+        <div class="frow">
+          <label class="field"><span>数量</span><input type="number" id="ins-n" min="1" max="500" value="10"></label>
+          <label class="field"><span>模式</span>
+            <select id="ins-model"><option value="complex">复数</option><option value="classic">经典</option></select></label>
+          <label class="field"><span>局数</span><input type="number" id="ins-games" min="1" placeholder="默认同默认流"></label>
+          <label class="field"><span>起种子</span><input type="number" id="ins-seed" min="1" placeholder="可空"></label>
+          <label class="field"><span>止种子</span><input type="number" id="ins-seed-end" min="1" placeholder="可空"></label>
+        </div>
+        <div class="frow">
+          <label class="field"><span>列</span><input type="number" class="bc" id="ins-cols" min="2" value="30"></label>
+          <label class="field"><span>行</span><input type="number" class="bc" id="ins-rows" min="2" value="16"></label>
+          <label class="field"><span>雷数</span><input type="number" class="bc" id="ins-mines" min="1" value="99"></label>
+          <span class="density" id="ins-density">—</span>
+        </div>
+        <div class="acts-row">
+          <button type="button" class="primary" id="btn-insert">入队</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>默认任务流</h2><span class="muted">无插队时客户端领的就是它</span></div>
+      <div class="card-body">
+        <div class="frow">
+          <label class="field"><span>模式</span>
+            <select id="def-model"><option value="complex">复数</option><option value="classic">经典</option></select></label>
+          <label class="field"><span>局数</span><input type="number" id="def-games" min="1" placeholder="可空"></label>
+        </div>
+        <div class="frow">
+          <label class="field"><span>列</span><input type="number" class="bc" id="def-cols" min="2" value="30"></label>
+          <label class="field"><span>行</span><input type="number" class="bc" id="def-rows" min="2" value="16"></label>
+          <label class="field"><span>雷数</span><input type="number" class="bc" id="def-mines" min="1" value="99"></label>
+          <span class="density" id="def-density">—</span>
+        </div>
+        <div class="acts-row">
+          <button type="button" class="primary" id="btn-default">修改</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>队列与结果</h2><span class="muted">暂停 / 清队 / 作废 / 限发</span></div>
+      <div class="card-body">
+        <div class="frow">
+          <button type="button" id="btn-pause">暂停发放</button>
+          <button type="button" class="danger" id="btn-clearq">清空优先队列</button>
+        </div>
+        <div class="frow">
+          <label class="field grow"><span>作废（任务ID / ip:地址 / name:名字）</span>
+            <input type="text" id="inv-key" placeholder="例如 20261205-complex 或 ip:1.2.3.4"></label>
+          <button type="button" class="danger" id="btn-invalidate">作废</button>
+        </div>
+        <div class="frow">
+          <label class="field"><span>每 IP 并发上限</span>
+            <input type="number" id="ip-limit" min="1" max="50" value="3"></label>
+          <button type="button" class="tiny" id="btn-limit">改</button>
+        </div>
+        <div class="frow" id="pomo-row">
+          <button type="button" id="btn-pomo">开</button>
+          <label class="field"><span>调度番茄钟时长（到点停发货，正在跑的局间歇）</span>
+            <span class="seedrow">
+              <input type="text" id="pomo-w" value="25m" placeholder="25m / 1h30m / 90s"
+                     aria-label="连算多久">连算
+              <input type="text" id="pomo-r" value="5m" placeholder="5m / 10m / 30s"
+                     aria-label="休息多久">休息
+            </span></label>
+          <button type="button" class="tiny" id="btn-pomo-set">改</button>
+          <span class="density" id="pomo-state">—</span>
+        </div>
+        <p class="foot-note" id="pomo-hint">按墙上时钟算的全局节拍：到了休息段不再发新任务，正在跑的那单在「两局之间」睡到这一段结束（进程不死、已算的局不丢，租约靠心跳续着）。开/改时长都从这一刻起算新的一段；已在跑的任务沿用它领到的时刻表，改时长只影响之后领的。关掉同理。</p>
+        <div class="frow">
+          <label class="field"><span>回收冷却（被剔除/超时收走的任务，多久内不再发放）</span>
+            <span class="seedrow">
+              <input type="number" id="cool-d" min="0" max="7" inputmode="numeric" aria-label="冷却天">天
+              <input type="number" id="cool-h" min="0" max="23" inputmode="numeric" aria-label="冷却小时">时
+              <input type="number" id="cool-m" min="0" max="59" inputmode="numeric" aria-label="冷却分钟">分
+              <input type="number" id="cool-s" min="0" max="59" inputmode="numeric" aria-label="冷却秒">秒
+            </span></label>
+          <button type="button" class="tiny" id="btn-cool">改</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>合计（有效结果）</h2>
+      <div class="head-acts">
+        <button type="button" class="ghost tiny" id="btn-agg-clear"
+                title="清空所有列的筛选条件">清除全部筛选</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table class="grid" id="t-agg">
+        <thead><tr><th data-col="model" data-label="模式">模式</th><th data-col="spec" data-label="规格">规格</th><th class="num">任务</th><th class="num">局数</th><th class="num">胜率</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <p class="empty" id="e-agg" hidden></p>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><h2>进行中</h2><span class="muted" id="muted-inprog"></span>
+      <button type="button" class="danger tiny" id="btn-kick" hidden
+              title="把勾选的任务强制收回队列重发；未交的结果作废">剔除此会话</button>
+      <button type="button" class="danger tiny" id="btn-drop" hidden
+              title="把勾选的任务直接删除（不回队列，种子作废）">删除此会话</button></div>
+    <div class="table-wrap">
+      <table class="grid" id="t-inprog">
+        <thead><tr><th class="kick-head"><input type="checkbox" id="inprog-all" aria-label="全选/全不选"> 任务</th><th>模式</th><th>规格</th><th title="求解器源码指纹（编译期烙进二进制，领取任务时上报）">求解器</th><th title="客户端程序字节的哈希（与 manifest 同口径，领取任务时上报）。与「求解器」各管一半：更新是逐文件换的，只有一半对得上「已发布」= 半更新">客户端</th><th class="num">进度</th><th class="num">上次通信</th><th class="num">已领</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <p class="empty" id="e-inprog" hidden></p>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><h2>优先队列</h2><span class="muted" id="queue-count">插队任务，先到先领 · 冷却中的暂时领不走</span>
+      <div class="head-acts">
+        <button type="button" class="ghost" id="btn-queue-open"
+                title="完整队列：筛选 / 分页 / 删除">队列详情…</button>
+      </div></div>
+    <p class="rest-banner" id="pomo-banner" hidden>☕ 番茄钟休息中</p>
+    <div class="table-wrap">
+      <table class="grid" id="t-queue">
+        <thead><tr><th>种子</th><th>模式</th><th>规格</th><th class="num">局数</th><th class="num" title="这一组当前还在队列里的任务条数（被领走的自动从组里掉出去）">剩余</th><th class="num" title="被租约收回或被剔除后重入队的任务有一段冷却期，冷却结束前客户端领不走；正常插队的任务没有冷却，显示 —。合并成一行的一组取最早解冻的那个">冷却剩余</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <p class="empty" id="e-queue" hidden></p>
+    <p class="foot-note">这里只放最前面 10 组（队首的先被领走）；筛选、翻页与删除在右上「队列详情」弹窗里。</p>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>最近结果</h2>
+      <span class="muted" id="done-count"></span>
+      <div class="head-acts">
+        <button type="button" class="ghost" id="btn-hist-open"
+                title="完整历史：点开现拉一次全量明细，再筛选 / 分页 / 看作废说明">历史记录…</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table class="grid" id="t-done-mini">
+        <thead><tr><th></th><th>任务</th><th>模式</th><th>规格</th><th class="num">局数</th><th class="num">胜率</th><th>IP</th><th>系统 / 设备</th><th title="求解器源码指纹">求解器</th><th title="客户端程序字节的哈希">客户端</th><th>时间</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <p class="empty" id="e-done-mini" hidden></p>
+    <p class="foot-note">这里只放最新 10 条；筛选与翻页在右上「历史记录」弹窗里——完整历史点开才现拉，约 1~5 秒。</p>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>版本身份</h2>
+      <span class="muted">求解器 = 源码指纹（与 CMake/打包同算法）；客户端 = 程序字节哈希（与 manifest 同口径）</span>
+      <div class="head-acts">
+        <button type="button" class="ghost" id="btn-ver-open"
+                title="两个身份的全部历史（本机 git 现算）">版本历史…</button>
+      </div>
+    </div>
+    <p class="solver-line">
+      <span class="solver-scope" title="当前进行中任务：按「求解器 · 客户端」这个组合聚合，每个组合有几个终端在跑（一个终端=一个客户端进程=一个任务）。两个身份都在领取任务时上报、由服务器暂存——调度端和客户端都是新版才有值，否则归「未上报」（不代表包旧）。混跑期全列出来，不挑一个骗人">线上在跑</span>
+      <span id="solver-fleet"><code>—</code></span>
+      <span class="muted" id="solver-fleet-note"></span>
+    </p>
+    <p class="solver-line">
+      <span class="solver-scope" title="服务器自动更新 manifest 里那份：求解器一个指纹；客户端按平台各一份（mac = 整包二进制，win / linux = 包里那个 dist_client.py）">已发布</span>
+      <span class="muted">求解器</span> <code id="solver-published">—</code>
+      <span class="muted">客户端</span> <span id="client-published">—</span>
+      <span class="muted" id="solver-published-note"></span>
+    </p>
+    <p class="solver-line">
+      <span class="solver-scope" title="本机工作区文件实算，含未提交改动：求解器 = 源码指纹，客户端 = tools/dist_client.py 的哈希。与「已发布」对不上就是改了还没发">工作区</span>
+      <span class="muted">求解器</span> <code id="solver-current">—</code>
+      <span class="muted">客户端</span> <code id="client-current">—</code>
+      <span class="muted" id="solver-dirty"></span>
+    </p>
+    <div class="table-wrap">
+      <table class="grid" id="t-solver">
+        <thead><tr><th title="求解器源码指纹">求解器</th><th title="客户端程序字节哈希（tools/dist_client.py 在那个提交的内容）">客户端</th><th>提交</th><th>时间</th><th>说明</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <p class="empty" id="e-solver" hidden></p>
+    <p class="foot-note">这里只放最新 10 条，全部历史在右上「版本历史」弹窗里。
+      两个身份共用<b>一条时间线</b>：任一轴的指纹变了就收一条，所以「这次到底换了哪一半」一眼看得出；
+      更早的提交两个都没变，指纹与上一行相同。客户端那列的 — = 那个提交时还没有
+      tools/dist_client.py（客户端 2026-10-31 才有）。
+      只有「工作区」那行允许在表里查不到——它含未提交改动，改着玩只动这一行，别拿它当线上口径对账。</p>
+  </section>
+</main>
+
+<dialog id="ver-dlg">
+  <div class="card-head">
+    <h2>版本身份历史</h2>
+    <span class="muted" id="ver-count"></span>
+    <div class="head-acts">
+      <button type="button" class="ghost" id="btn-ver-close">关闭（Esc）</button>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table class="grid" id="t-ver">
+      <thead><tr><th title="求解器源码指纹">求解器</th><th title="客户端程序字节哈希">客户端</th><th>提交</th><th>时间</th><th>说明</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="pager" id="ver-pager" hidden>
+    <label class="num-field" for="ver-size"><span>每页</span>
+      <input type="number" id="ver-size" min="1" max="500" step="1" value="15" inputmode="numeric" aria-label="每页条数"><span>条</span></label>
+    <button type="button" class="ghost" id="ver-prev">‹ 上一页</button>
+    <label class="num-field" for="ver-num"><span>第</span>
+      <input type="number" id="ver-num" min="1" step="1" value="1" inputmode="numeric" aria-label="页码"><span id="ver-total">/ 1 页</span></label>
+    <button type="button" class="ghost" id="ver-next">下一页 ›</button>
+  </div>
+  <p class="foot-note">绿底 = 两个身份都与「工作区」当前值相同；客户端那列的 — = 那个提交时还没有
+    tools/dist_client.py。数据来自本机 git，不经过服务器。</p>
+</dialog>
+
+<dialog id="queue-dlg">
+  <div class="card-head">
+    <h2>优先队列</h2>
+    <span class="muted" id="queue-dlg-count"></span>
+    <div class="head-acts">
+      <button type="button" class="danger tiny" id="btn-qdel" hidden
+              title="把勾选的任务从队列删除；种子不会自动补">删除选中</button>
+      <button type="button" class="ghost tiny" id="btn-qfilter-clear"
+              title="清空所有列的筛选条件">清除全部筛选</button>
+      <button type="button" class="ghost" id="btn-queue-close">关闭（Esc）</button>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table class="grid" id="t-queue-full">
+      <thead><tr>
+        <th data-col="task" data-label="种子"><input type="checkbox" id="queue-all" aria-label="全选/全不选"> 种子</th>
+        <th data-col="model" data-label="模式">模式</th>
+        <th data-col="spec" data-label="规格">规格</th>
+        <th class="num" data-col="games" data-label="局数">局数</th>
+        <th class="num" title="这一组当前还在队列里的任务条数（被领走的自动从组里掉出去）">剩余</th>
+        <th class="num" title="被租约收回或被剔除后重入队的任务有一段冷却期，冷却结束前客户端领不走；正常插队的任务没有冷却，显示 —。合并成一行的一组取最早解冻的那个">冷却剩余</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <p class="empty" id="e-queue-full" hidden></p>
+  <div class="cf-pop" id="queue-pop" hidden></div>
+  <div class="pager" id="queue-pager" hidden>
+    <label class="num-field" for="queue-size"><span>每页</span>
+      <input type="number" id="queue-size" min="1" max="500" step="1" value="30" inputmode="numeric" aria-label="每页条数"><span>条</span></label>
+    <button type="button" class="ghost" id="queue-prev">‹ 上一页</button>
+    <label class="num-field" for="queue-num"><span>第</span>
+      <input type="number" id="queue-num" min="1" step="1" value="1" inputmode="numeric" aria-label="页码"><span id="queue-total">/ 1 页</span></label>
+    <button type="button" class="ghost" id="queue-next">下一页 ›</button>
+  </div>
+  <p class="foot-note">相邻同参数、种子连续的任务合并成一行；勾选按组整进整出，删除只删队列里选中的任务，种子不会自动补。
+    弹窗开着时队列还在实时刷新，删完想核对直接看行有没有掉出去。</p>
+</dialog>
+
+<dialog id="hist-dlg">
+  <div class="card-head">
+    <h2>历史记录</h2>
+    <span class="muted" id="hist-count"></span>
+    <div class="head-acts">
+      <label class="inline"><input type="checkbox" id="done-show-invalid" checked> 显示已作废</label>
+      <button type="button" class="ghost tiny" id="btn-filter-clear"
+              title="清空所有列的筛选条件">清除全部筛选</button>
+      <button type="button" class="ghost" id="btn-hist-close">关闭（Esc）</button>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table class="grid" id="t-done">
+      <thead><tr><th></th>
+        <th data-col="task" data-label="任务">任务</th>
+        <th data-col="model" data-label="模式">模式</th>
+        <th data-col="spec" data-label="规格">规格</th>
+        <th class="num" data-col="games" data-label="局数">局数</th>
+        <th class="num" data-col="wr" data-label="胜率">胜率</th>
+        <th data-col="ip" data-label="IP">IP</th>
+        <th data-col="dev" data-label="系统 / 设备">系统 / 设备</th>
+        <th>求解器</th>
+        <th title="客户端程序字节的哈希">客户端</th>
+        <th data-col="time" data-label="时间">时间</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <p class="empty" id="e-done" hidden></p>
+  <div class="cf-pop" id="cf-pop" hidden></div>
+  <div class="pager" id="done-pager" hidden>
+    <label class="num-field" for="done-size"><span>每页</span>
+      <input type="number" id="done-size" min="1" max="500" step="1" value="30" inputmode="numeric" aria-label="每页条数"><span>条</span></label>
+    <button type="button" class="ghost" id="page-prev">‹ 上一页</button>
+    <label class="num-field" for="page-num"><span>第</span>
+      <input type="number" id="page-num" min="1" step="1" value="1" inputmode="numeric" aria-label="页码"><span id="page-total">/ 1 页</span></label>
+    <button type="button" class="ghost" id="page-next">下一页 ›</button>
+  </div>
+  <p class="foot-note">被打上 × 的行是已作废的结果：保留在库里备查，但统计、合计与导出都会排除。</p>
+</dialog>
+
+<dialog id="dlg">
+  <form method="dialog" class="dlg-form" id="dlg-form">
+    <h3>需要管理口令</h3>
+    <div class="dlg-body">
+      <p class="muted" id="dlg-desc"></p>
+      <label class="field"><span>管理口令（与 cms 相同）</span>
+        <input type="password" id="dlg-pw" autocomplete="off"></label>
+      <label class="inline"><input type="checkbox" id="dlg-remember"> 记住口令（本次页面有效，不写盘）</label>
+      <p class="dlg-note bad" id="dlg-err" hidden></p>
+    </div>
+    <div class="dlg-foot">
+      <button type="button" class="ghost" id="dlg-cancel">取消</button>
+      <button type="submit" class="primary" id="dlg-ok">执行</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" hidden></div>
+<!-- 合计卡的列筛选浮层（#cf-pop 在 hist-dlg 里，被 dialog 的 top layer 挡住，主页面用不了） -->
+<div class="cf-pop" id="agg-pop" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>

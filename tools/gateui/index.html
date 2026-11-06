@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>密码管理 · cmsgate</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <h1>密码管理</h1>
+    <span class="sub">cmsgate · 本地界面</span>
+  </div>
+  <div class="chips" id="chips"></div>
+  <button type="button" class="ghost" id="btn-refresh">刷新</button>
+</header>
+
+<p class="warn-strip" id="banner" hidden></p>
+
+<main>
+  <section class="toolbar">
+    <button type="button" class="primary" id="btn-add">+ 新增密码</button>
+    <div class="search">
+      <input type="search" id="search" placeholder="搜索标签 / 备注 / id" autocomplete="off">
+    </div>
+    <span class="spacer"></span>
+    <button type="button" id="btn-push" title="把本地密码表推到服务器">推送</button>
+    <button type="button" id="btn-pull" title="用服务器那份覆盖本地（会先警告）">拉取</button>
+    <button type="button" id="btn-seed" title="解码 / 编码复数扫雷种子">种子工具</button>
+    <button type="button" class="danger" id="btn-revoke" title="让所有在线会话立即失效">踢掉所有会话</button>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>密码条目</h2>
+      <span class="muted" id="entries-count"></span>
+    </div>
+    <div class="table-wrap">
+      <table class="grid" data-tbl="entries">
+        <thead>
+          <tr>
+            <th>标签</th>
+            <th data-col="state" data-label="状态">状态</th>
+            <th>有效期</th>
+            <th>最近使用</th>
+            <th class="num">成功/失败</th>
+            <th>id</th>
+            <th class="acts">操作</th>
+          </tr>
+        </thead>
+        <tbody id="entries-body"></tbody>
+      </table>
+    </div>
+    <p class="empty" id="entries-empty" hidden></p>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>最近访问</h2>
+      <span class="muted" id="usage-count"></span>
+      <!-- ★ 默认就藏着「已删除密码的历史记录」，所以数字天生不等。
+           给出这个一键放出来的入口，而不是让用户自己去找那个藏在列头面板里的复选框。 -->
+      <button type="button" class="link-btn" id="usage-show-all" hidden
+              title="连已删除密码的历史记录一起显示（它们默认被藏起来）">显示全部记录</button>
+      <span class="muted" id="usage-fresh"></span>
+      <div class="head-acts">
+        <button type="button" class="ghost" id="usage-clear" hidden>清除全部筛选</button>
+        <button type="button" class="ghost" id="usage-refresh"
+                title="立刻从服务器拉一份最新的访问记录">立即刷新</button>
+        <button type="button" class="ghost" id="usage-auto-toggle" aria-pressed="false"
+                title="暂停后就不再自动拉了；手动「立即刷新」随时可用">⏸ 暂停自动刷新</button>
+        <!-- 间隔与每页条数都是**自由输入**的数字框（下拉只有 4~5 个档，
+             想每 13 秒刷一次、每页 7 条时就没法选）。失焦或回车才生效，
+             不是每敲一个键就发一次请求。 -->
+        <label class="num-field" for="usage-auto">
+          <span>自动</span>
+          <input type="number" id="usage-auto" min="1" max="3600" step="1" value="30"
+                 inputmode="numeric" aria-label="自动刷新间隔（秒）"
+                 title="每隔多少秒自动拉一次（1–3600 秒）">
+          <span>秒</span>
+        </label>
+        <label class="num-field" for="usage-size">
+          <span>每页</span>
+          <input type="number" id="usage-size" min="1" max="500" step="1" value="20"
+                 inputmode="numeric" aria-label="每页条数"
+                 title="每页显示多少条（1–500）">
+          <span>条</span>
+        </label>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table class="grid" data-tbl="usage">
+        <thead>
+          <tr>
+            <th data-col="time" data-label="时间">时间</th>
+            <th data-col="result" data-label="结果">结果</th>
+            <th data-col="pwid" data-label="密码">密码</th>
+            <th data-col="ip" data-label="IP">IP</th>
+            <th data-col="browser" data-label="浏览器">浏览器</th>
+            <th data-col="osdev" data-label="系统/设备">系统 / 设备</th>
+          </tr>
+        </thead>
+        <tbody id="usage-body"></tbody>
+      </table>
+    </div>
+    <p class="empty" id="usage-empty" hidden></p>
+
+    <!-- 翻页条：分页在服务端做（offset），不是把上千条全拉到前端再切 -->
+    <div class="pager" id="pager" hidden>
+      <button type="button" class="ghost" id="page-prev">‹ 上一页</button>
+      <span class="page-info" id="page-info"></span>
+      <button type="button" class="ghost" id="page-next">下一页 ›</button>
+      <button type="button" class="ghost" id="page-first">回到最新</button>
+    </div>
+    <p class="foot-note">
+      <b>最新的在最上面。</b>点任意列头右边的 <b>▾</b> 可以只筛这一列（多选 = 或，
+      不同列之间 = 且）。筛选在服务端做——「仅失败」能找到条数上限之外的老记录，
+      不会被「最近 N 条」挡住。时间是本机时区；IP 是服务器记录的原值
+      （对外分享日志时只该给哈希）。
+    </p>
+    <p class="foot-note">
+      访问日志在服务器上，只能主动去问——所以「自动」到期就 ssh 拉一份（默认 30 秒，
+      间隔和每页条数都能直接输数字，点「⏸ 暂停自动刷新」就停）。
+      切到别的标签页会暂停，切回来立刻补一次；写操作进行中也会让开；
+      翻到第 2 页以后同样不自动刷（否则新记录插在最前，正在读的那一页会整体挪走）。
+      拉取失败时照旧显示上次的数据，标题旁会标出来。
+    </p>
+  </section>
+</main>
+
+<!-- 上传进度（固定在页面底部，2026-10-18）
+     ★ 为什么不能放在对话框里：上传是在对话框**关闭之后**才开始的
+     （选完图 → 关框 → 压缩 → 上传），放框里根本看不见。 -->
+<div class="page-prog" id="page-prog" hidden>
+  <div class="page-prog-inner">
+    <span class="page-prog-label" id="prog-label">正在上传背景图</span>
+    <div class="prog-bar"><div class="prog-fill" id="prog-fill"></div></div>
+    <span class="prog-txt" id="prog-txt"></span>
+  </div>
+</div>
+
+<!-- 通用对话框：所有交互都走这里，避免堆一堆面板 -->
+<dialog id="dlg">
+  <form method="dialog" class="dlg-form" id="dlg-form">
+    <h3 id="dlg-title"></h3>
+    <div id="dlg-body" class="dlg-body"></div>
+    <p class="dlg-note" id="dlg-note" hidden></p>
+    <div class="dlg-foot">
+      <button type="button" class="ghost" id="dlg-cancel">取消</button>
+      <button type="submit" class="primary" id="dlg-ok">确定</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- 图标裁剪器（2026-10-18）
+     ★ 为什么不用上面那个通用对话框：它是「表单 + 确定/取消」的形态，
+     而这里要的是一块可拖动/可缩放的画布 + 实时预览，塞进 dlg-body 会被
+     它的排版规则约束（而且 keydown 会被表单的提交逻辑抢走）。 -->
+<dialog id="crop-dlg" class="crop-dlg">
+  <div class="crop-head">
+    <h3>裁剪应用图标</h3>
+    <p class="crop-sub">
+      拖动框内移动、拖<b>四角</b>或<b>四边</b>缩放。图标必须是正方形，
+      所以宽高联动 —— 边长最小 <b id="crop-min"></b>px（原图像素，不是屏幕像素）。
+    </p>
+  </div>
+  <div class="crop-main">
+    <div class="crop-stage" id="crop-stage">
+      <img id="crop-img" alt="">
+      <div class="crop-box" id="crop-box">
+        <span class="crop-hd" data-h="nw"></span>
+        <span class="crop-hd" data-h="ne"></span>
+        <span class="crop-hd" data-h="sw"></span>
+        <span class="crop-hd" data-h="se"></span>
+        <span class="crop-hd" data-h="n"></span>
+        <span class="crop-hd" data-h="e"></span>
+        <span class="crop-hd" data-h="s"></span>
+        <span class="crop-hd" data-h="w"></span>
+      </div>
+    </div>
+    <div class="crop-side">
+      <div class="crop-side-title">最终图标预览</div>
+      <div class="crop-prev" id="crop-prev-256">
+        <span class="crop-prev-tag">256</span>
+      </div>
+      <div class="crop-prev-row">
+        <div class="crop-prev sm" id="crop-prev-64"><span class="crop-prev-tag">64</span></div>
+        <div class="crop-prev sm" id="crop-prev-32"><span class="crop-prev-tag">32</span></div>
+        <div class="crop-prev sm" id="crop-prev-16"><span class="crop-prev-tag">16</span></div>
+      </div>
+      <div class="crop-info" id="crop-info"></div>
+    </div>
+  </div>
+  <div class="crop-foot">
+    <button type="button" class="ghost" id="crop-reset">重置选框</button>
+    <span class="crop-spacer"></span>
+    <button type="button" class="ghost" id="crop-cancel">取消</button>
+    <button type="button" class="primary" id="crop-ok">用这个区域</button>
+  </div>
+</dialog>
+
+<!-- 种子工具箱：复数扫雷的种子串 ⇄ 明文 JSON。
+     编解码用游戏同一份 seedcodec.js（动态 import），全部在本页浏览器里完成，
+     种子内容不经服务器。加密密钥本来就在游戏前端里，这里没有引入新暴露面。 -->
+<dialog id="seed-card" class="seed-dlg">
+  <div class="card-head">
+    <h2>种子工具箱</h2>
+    <button type="button" class="ghost" id="seed-close">关闭</button>
+  </div>
+  <p class="muted seed-note">
+    粘贴种子串点「解码」看明文 JSON；编辑 JSON 点「编码」生成种子串。
+    解码报 BAD SEED = 密钥不对或种子串已损坏。合法性判定与游戏端逐条一致。
+  </p>
+  <!-- 密钥框：留空 = 用内置默认密钥（值只存在于 seedcodec.js 里，界面绝不回显）。
+       type=password 遮住手输的密钥，防止旁人瞄屏；浏览器不保存（autocomplete=off）。 -->
+  <input type="password" id="seed-key" spellcheck="false" autocomplete="off"
+         placeholder="密钥（留空 = 内置默认；只有换过密钥的种子串才需要填）">
+  <textarea id="seed-in" rows="5" spellcheck="false" autocomplete="off"
+            placeholder="粘贴种子串，或粘贴明文 JSON 后点「编码」"></textarea>
+  <div class="seed-actions">
+    <button type="button" class="primary" id="seed-decode">解码 → JSON</button>
+    <button type="button" class="primary" id="seed-encode">JSON → 编码</button>
+    <button type="button" class="ghost" id="seed-copy">复制结果</button>
+  </div>
+  <pre id="seed-out" class="seed-out" hidden></pre>
+</dialog>
+
+<!-- 底部弹窗堆：页面所有提示的唯一出口（toast / 刷新回执 / 命令原始输出都进这里）。
+     命令输出不过滤也不美化，出错时这就是证据 → 不自动关，只能点那条自己的 ×。
+     aria-live=polite：读屏会念出来，但不打断用户正在输入的口令框。 -->
+<div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
+
+<!-- 列头筛选面板。挂在 body 上并用 position:fixed 定位：
+     放进表格会被 .table-wrap 的 overflow 裁掉，也会被 sticky 表头的层叠上下文压住。 -->
+<div id="cf-pop" class="cf-pop" hidden></div>
+
+<script src="/app.js"></script>
+</body>
+</html>

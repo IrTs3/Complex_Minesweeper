@@ -1,0 +1,135 @@
+@font-face {
+  font-family: 'IBM Plex Serif';
+  /* 子集化 woff2 优先（160,380 → 8,368 B，gzip 69,925 → 8,411）；ttf 原图兜底老浏览器。
+     子集只保留可打印 ASCII + ± √ —— ui.ts 的 fontFor() 会把含非 ASCII 的串整体路由到中文字体，
+     所以 IBM Plex 实际不承担任何中文/非 ASCII 字形。GPOS/post/GSUB 等排版表已丢弃
+     （Canvas 不使用 OpenType 特性），这是体积下降的主因。 */
+  src: url('assets/ibmplex-ascii.woff2') format('woff2'),
+       url('assets/IBMPlexSerif-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  /* 触摸端：阻止下拉刷新/边缘回弹把整页拖走（canvas 自己处理平移） */
+  overscroll-behavior: none;
+  /* 只在 canvas 还没初始化（首帧之前）或 WebGL 不可用时露出来。
+     正常运行时 canvas 铺满整个视口，背景图由 Renderer::drawImageCover
+     按 cover 等比缩放画满——**不拉伸**。
+     颜色按"真实首帧"取：canvas 先铺 kWindowBg(#E9EEF4) 再叠 73% 的底图，
+     合成后天空约 #535F87、水面约 #E3EEF7。旧的纯灰 #6b7a8c 两头都不挨，
+     加载期会先闪一下这个第三种颜色再跳到深蓝，所以改成纵向渐变做过渡。 */
+  /* 用长写法而不是 background 简写：简写里颜色/图片/重复的顺序一旦写错整条声明会被
+     静默丢弃，首帧就变成白底（比原来的灰更糟）。 */
+  background-color: #4f5b84;
+  background-image: linear-gradient(180deg,
+    #4f5b84 0%, #55618c 35%, #93a1bd 65%, #dbe7f3 100%);
+  background-repeat: no-repeat;
+}
+
+#stage {
+  position: fixed;
+  inset: 0;
+  /* canvas 自身就是视口大小（见 game.ts 的 availSize），所以贴齐左上、不居中留边；
+     居中会在尺寸差一个像素时露出 0.5px 的缝。 */
+  display: block;
+}
+
+#board {
+  display: block;
+  background: transparent;
+  box-shadow: none;
+  touch-action: none;
+  cursor: default;
+  -webkit-user-select: none;
+  user-select: none;
+  /* 长按在 iOS 上会弹出系统「复制/查找」气泡，与游戏内的"长按=标记菜单"直接冲突 */
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 键盘捕获用的隐形输入框：必须可聚焦，否则拿不到 keydown / paste */
+#kb {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+  resize: none;
+  color: transparent;
+  caret-color: transparent;
+}
+
+/* 装饰特效层（星光 + 点击弹 USTC 字母），画在独立画布上。
+   ★ `pointer-events: none` 是铁律：这块铺满整个视口、盖在棋盘上面，
+     一旦收事件就把左键翻开/右键插旗全吞了，游戏直接不能玩。
+   ★ **刻意不写 z-index**：本站没有任何 z-index 层级，绘制次序完全跟着 DOM 走。
+     #fx 排在 #stage 之后 → 盖住棋盘；而所有对话框/菜单是运行时 append 到 body
+     末尾的 → 天然排在 #fx 之后 → 特效不会糊在设置面板上（用户定过规矩：
+     任何东西都不许遮棋盘，更不许遮面板）。
+     一旦哪天给 #fx 加了 z-index，它就压过所有后插入的面板 —— 别加。 */
+#fx {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* ── 种子工具箱（DOM 弹窗，SEED 菜单第 4 项打开）──
+   静态写在 index.html、且位于 #fx 之后 → 按绘制次序天然盖在特效层上。 */
+#seed-tool {
+  max-width: 720px;
+  width: min(720px, calc(100vw - 32px));
+  padding: 20px 22px;
+  box-sizing: border-box;
+  border: 1px solid #2a4258;
+  border-radius: 10px;
+  background: #101c28;
+  color: #dce9f4;
+  font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+#seed-tool::backdrop { background: rgba(20, 32, 46, 0.55); }
+#seed-tool .st-head { display: flex; align-items: center; justify-content: space-between; margin: 0 0 8px; }
+#seed-tool h2 { margin: 0; font-size: 16px; }
+#seed-tool .st-ghost {
+  border: 1px solid #2a4258; border-radius: 6px;
+  background: transparent; color: #9db8cd;
+  padding: 4px 12px; cursor: pointer;
+}
+#seed-tool .st-ghost:hover { background: #1a2b3c; color: #dce9f4; }
+#seed-tool .st-note { margin: 0 0 10px; color: #8aa5ba; font-size: 12px; }
+#seed-tool-key {
+  width: 100%; box-sizing: border-box; margin-bottom: 8px;
+  font-size: 12.5px;
+}
+#seed-tool-in {
+  width: 100%; box-sizing: border-box; resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px; line-height: 1.5;
+}
+#seed-tool .st-actions { display: flex; gap: 8px; margin: 10px 0; }
+#seed-tool .st-actions button {
+  border: 1px solid #2a4258; border-radius: 6px;
+  background: #1a2b3c; color: #dce9f4;
+  padding: 6px 14px; cursor: pointer;
+}
+#seed-tool .st-actions button:hover { background: #24394e; }
+#seed-tool-out {
+  margin: 0; padding: 14px 16px;
+  max-height: 340px; overflow: auto;
+  font-size: 12.5px; line-height: 1.55;
+  white-space: pre-wrap; word-break: break-word;
+  background: #0f1b26; color: #cfe3f0;
+  user-select: all; border-radius: 6px;
+}
+#seed-tool-out.bad { background: #2a1210; color: #ffd9d4; }

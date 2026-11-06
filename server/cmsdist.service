@@ -1,0 +1,33 @@
+[Unit]
+Description=cmsdist — 复数扫雷求解器基准调度服务（只听回环 7120，对外走 nginx 12712 TLS）
+After=network.target
+
+[Service]
+Type=simple
+User=cmsgate
+Group=cmsgate
+# 2026-11-05 换代完成收口：公网入口只剩 nginx 的 12712 TLS；明文 7120 收回环——
+# 本机自测/distctl 还能用，外网直连明文口彻底没路。
+ExecStart=/usr/bin/python3 -B /opt/cmsdist/dist_server.py serve 127.0.0.1 7120
+Restart=always
+RestartSec=3
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=CMSDIST_STATE=/var/lib/cmsdist
+
+# 沙箱（与 cmsgate.service 同款收紧；只写自己的状态目录，不碰 cmsgate 数据）
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/cmsdist
+PrivateTmp=true
+PrivateDevices=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target
