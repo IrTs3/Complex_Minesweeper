@@ -1,0 +1,11 @@
+[Unit]
+Description=每天 03:17 触发 cmsgate 数据快照
+
+[Timer]
+# 与 Mac 拉取（07:23）错开：先快照、后拉取，保证 Mac 拉到当天的
+OnCalendar=*-*-* 03:17:00
+# 停机期间漏跑的，开机后补一次
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,24 @@
+[Unit]
+Description=cmsgate 探活 + Healthchecks ping（oneshot，由 timer 触发）
+After=network-online.target cmsgate.service nginx.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/cmsgate/healthcheck.sh
+
+# 只读探活 + 出站 ping + 一个失败计数文件（连续 2 轮才告警的去重状态）→ 可严格沙箱，
+# ReadWritePaths 只为那个文件开口（- 前缀：文件被删也不至于起不来，脚本会退回单次即报并吭声）。
+# 刻意不设 SystemCallFilter / MemoryDenyWriteExecute：那两者容易掐断 curl 的 TLS 握手，
+# 得不偿失；本服务已无其余写权限、无 capabilities，风险面足够小。
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=-/opt/cmsgate/healthcheck-fails
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+# AF_UNIX 给 systemctl 走 D-Bus；AF_INET/AF_INET6 给 curl（回环探活 + 出站 443 到监控服务）
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=

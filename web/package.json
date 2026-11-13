@@ -1,0 +1,14 @@
+{
+  "name": "complex-minesweeper-web",
+  "version": "1.0.0",
+  "description": "Complex Minesweeper - Web Version (WASM + TypeScript)",
+  "scripts": {
+    "build:ts": "tsc",
+    "build:wasm": "mkdir -p build && cd build && emcmake cmake .. && emmake make",
+    "build": "npm run build:wasm && npm run build:ts",
+    "dev": "tsc --watch"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0"
+  }
+}

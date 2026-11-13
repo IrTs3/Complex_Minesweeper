@@ -1,0 +1,100 @@
+⚠ 本文件是 2026-10-13 的历史快照，内容已过时（目标数、行数、工具清单都对不上现在）。
+   权威文档是 docs/项目结构说明.md —— 那里有逐文件职责、带行号的关键实现、构建全链路。
+   保留本文件只为对照「当时的认知」，不要依据它改代码。
+
+────────────────────────────────────────────────────────────────────
+
+## 工程结构：
+
+Project/
+├── CMakeLists.txt  构建定义：C++20、find_package(SFML 3)、RES_DIR 指向 assets/
+│ minesweeper（游戏）+ base（种子加解密小工具）+ solver（复盘统计 CLI）
+│ 仅 APPLE 启用 OBJCXX 链 AppKit；WIN32 内置静态链接/裁剪参数
+│
+├── src/
+│ ├── core/ 纯逻辑层 —— 无 SFML 和 API（可独立编译 WASM 网页版直接复用）
+│ │ ├── Cell.h  MineType 枚举（None/P1/M1/Pi/Mi）+ Cell 结构体
+│ │ │ （mine/flag/opened/exploded + realSum/imagSum/minesAround 三提示字段）
+│ │ ├── ComplexMath.h  提示数学：模长、最大平方因子、最简根式 formatHint（"$\sqrt2$ "/" $2\sqrt2$"）、
+│ │ │ HintKind 分类（Empty/PureReal/PureImag/Mixed）
+│ │ ├── Board.h  class Board 声明：布雷/首点安全、open/chordOpen 三态、
+│ │ ├── Board.cpp  标记五态循环与 setFlag、flood 连锁、判胜、axisUnflagged()、allMinesFlaggedGaugeConsistent()（union-find+锚定表）
+│ │ ├── Seed.h  种子/存档共用结构（magic "MSD1"，含首点坐标；kind=new/save）
+│ │ │ + seedIsSane() 外部输入校验（拦 cols=99999 这类炸弹）
+│ │ ├── SaveGame.h  captureProgress / restoreProgress 回放（顺序铁律：安全格→标记→最后踩雷）
+│ │ ├── Rabbit.h  RFC 4503 Rabbit 流密码加密 + Base64套壳 ，仅依赖 C++20 标准库
+│ │ └── SetupConfig.h 62 行 自定义局参数 + clampToBoard()（手动分型/随机分型两条互斥路径）
+│ │
+│ ├── desktop/ SFML 桌面端 —— 表现层，依赖 SFML，除 FileDialog 外不碰平台 API
+│ │ ├── main.cpp  主循环，几乎全在一个 main() 里：
+│ │ │ 事件分发、计时（首点翻开后才走表；切窗/开面板暂停）、难度切换 kDiffs[3]、
+│ │ │ 双击判定(150–1500ms)、键盘快捷选择（悬停 1~5 标记；F1 帮助 / F2 重开 /
+│ │ │ F3~F5 切难度，局中弹确认）、种子导入/导出/进度存档、
+│ │ │ chord 触发、chordFail 三态处理、USTC 彩蛋开关
+│ │ ├── Renderer.h  class Renderer 声明：布局、命中检测、右键菜单/种子对话框/
+│ │ │ 设置面板/自定义局面板的全部状态机 + Phase/Hud
+│ │ ├── Renderer.cpp  全项目最大文件：格子/雷/标记/根式绘制、HUD 药丸、标题栏、
+│ │ │ 结算横幅、P3 色彩补偿 displayColor()、自适应格子
+│ │ │ （40px 优先、min 24px、maxColsAtMinimumCell 等）、
+│ │ │ 清晰文字（textSpr/textTLSpr/textCJKSpr 内对字体纹理 setSmooth(false)）
+│ │ ├── SettingsIO.h  SettingsData（格子色/chordFail/doubleClickMs/背景/四标记/空白格）
+│ │ ├── SettingsIO.cpp  settings.ini 读写（[appearance]/[markers]/[blank] 三段）、
+│ │ │ importImage/removeImage/clearAllImages
+│ │ │ （config/ 目录管理，纯 C++20 标准库可单测）
+│ │ ├── FileDialog.h  跨平台小接口：pickImageFile() + screenUsableSize()
+│ │ ├── FileDialog.mm  macOS 实现：NSOpenPanel + NSScreen.visibleFrame（ObjC++）
+│ │ └── FileDialog_win.cpp  Windows 实现：GetOpenFileNameW + SPI_GETWORKAREA
+│ │
+│ └── solver/ 复盘分析引擎（只被 tools/solver.cpp 用；游戏内自动解题已移除）
+│     └── SolverEngine.h  约束推理/分量枚举/见证覆盖/全局DP + 免猜率统计
+│
+├── tools/ 独立 CLI 工具（不参与游戏构建）
+│ ├── base.cpp  Rabbit 加解密工具（c++ -std=c++20 单独编译，只复用 core/Rabbit.h 与 Seed 格式）
+│ └── solver.cpp  自由推理求解器与免猜率统计 CLI（--diffs/--games/--model/--seed/--budget；只链 core，不链 SFML）
+│
+├── web/ 网页端（WASM + TypeScript/Canvas）
+│ ├── CMakeLists.txt  Emscripten 构建配置，将 core/ 编译为 WASM
+│ ├── src/main.cpp  Emscripten 入口，暴露 core/ 接口给 JavaScript
+│ ├── ts/  TypeScript 前端源码
+│ │ ├── main.ts  入口：加载 WASM 模块
+│ │ ├── game.ts  游戏状态管理（难度、计时、输入处理）
+│ │ ├── renderer.ts  Canvas 渲染器（棋盘、格子、HUD）
+│ │ └── types.ts  WASM 模块类型定义
+│ ├── index.html  入口页面
+│ ├── style.css  样式
+│ ├── package.json  Node.js 项目配置
+│ └── tsconfig.json  TypeScript 编译配置
+│
+├── assets/ # 运行时资源（必须随可执行文件分发）
+│ ├── IBMPlexSerif-Regular.ttf 数字衬线字体
+│ ├── bg.jpg 内置默认背景
+│ └── dmg_bg.png / @2x dmg 安装盘背景（打包进 app 时会被排除）
+│
+├── scripts/ 构建/打包/部署脚本，按用途分 game/web/dist 三层
+│ ├── game/ 游戏本体：build.sh 本地构建、build_windows.sh 交叉编译 Win64、
+│ │   package.sh 出包、打包.command / 打包Windows.command 双击入口
+│ ├── web/  闸门与网站部署：deploy-gate/deploy-web/deploy-https/deploy-monitor/
+│ │   deploy-backup、install-mac-backup
+│ └── dist/ 分布式跑分：package-dist-client、deploy-dist、cmsdist-pull、
+│     install-cmsdist-pull、install-ctlui
+│
+├── cmake/
+│ └── mingw-w64-toolchain.cmake  MinGW 交叉编译工具链配置
+│
+├── docs/ 文档
+│ ├── 服务器迁移与排行榜方案.md  网页版(WASM)+三端排行榜规划
+│ ├── 求解器统计_*.txt  求解器统计分析
+│ ├── 使用说明.txt 分发包内给接收方的说明（打包原样复制）
+│ ├── 游戏玩法说明指引.txt 游戏内 ? 帮助面板文案原文与样式标注版
+│ ├── 项目结构.txt  本文件
+│ └── CLION-交叉编译配置.md  CLion 交叉编译工具链与 CMake Profile
+│
+├── third_party/ 第三方库源码
+│ ├── SFML-3.0.2/  SFML 图形库
+│ ├── freetype-VER-2-13-2/  字体渲染库
+│ ├── sfml-win/  Windows 交叉编译用 SFML（git 忽略）
+│ └── freetype-win/  Windows 交叉编译用 freetype（git 忽略）
+│
+├── README.md 项目主文档（规则/操作/设置/种子/构建/打包/实现要点）
+├── Release notes.md GitHub Releases 发布页说明
+└── 复数扫雷项目介绍.key 项目介绍演示文稿（未纳入 git）
