@@ -4485,13 +4485,19 @@ def run_tests(srv: Server, port: int, tok: str, state_dir: Path) -> None:
     chk("T59 ★ acme.sh 用钉 tag 的 git clone 取，脚本里没有任何「管道给 sh 执行」的安装方式",
         "git clone --depth 1 --branch ${ACME_TAG}" in hs_src
         and 'ACME_TAG="${ACME_TAG:-v3.1.6}"' in hs_src and "| sh" not in hs_src)
-    # 私钥只落服务器：仓库里不许有证书文件，上传命令的源里也不许有证书目录（rsync --delete
+    # 私钥只落服务器：入库面里不许有证书文件，上传命令的源里也不许有证书目录（rsync --delete
     # 一旦把 /etc/nginx/ssl 认成源，等于每次部署往外推私钥）。
-    _keys = [p for d in ("scripts", "server", "docs", "tools") for p in
-             list((root / d).rglob("*.pem")) + list((root / d).rglob("*.key"))]
+    # 「入库面」= git ls-files -co --exclude-standard：已跟踪 + 未被忽略的未跟踪文件。
+    # 不能拿 rglob 直接扫磁盘——*.key 同时是 Keynote 的后缀（docs/ 里那份演示稿被
+    # .gitignore 挡着，永远进不了仓库），扫磁盘会把不成立的假阳性报成红。
+    _repo_files = subprocess.run(
+        ["git", "ls-files", "-co", "--exclude-standard", "--", "scripts", "server", "docs", "tools"],
+        cwd=root, capture_output=True, text=True).stdout.split()
+    _keys = [f for f in _repo_files if f.endswith((".pem", ".key"))]
     chk("T59 ★ 私钥不入库、不在任何 rsync 源里",
         not _keys and "/etc/nginx/ssl" not in
-        "\n".join(ln for ln in dw_src.splitlines() if ln.startswith("rsync")))
+        "\n".join(ln for ln in dw_src.splitlines() if ln.startswith("rsync")),
+        f"入库面里的证书文件: {_keys[:4]}")
     # 只看**真的发起请求**的那几行：收口之后 https://${DOMAIN} 也出现在提示文案与
     # 跳转断言的比对串里，把它们一起算进来等于自己打自己。
     _h443 = [ln for ln in dw_src.splitlines()
@@ -7720,8 +7726,13 @@ print(json.dumps({"summary": {"games": games}}))   # 真 solver 末尾必打；r
     _gm90 = load_gate_manager()
     _gu90 = load_gate_ui()
     _gm90_src = (HERE / "gate_manager.py").read_text(encoding="utf-8")
-    chk("T93 CLI 白名单只有 MP3/WAV/FLAC（2026-11-12 用户裁决）",
-        _gm90.MUSIC_EXTS == {".mp3", ".wav", ".flac"})
+    chk("T93 CLI 白名单六格式（2026-11-12 裁决 MP3/WAV/FLAC + 2026-11-14 追加 M4A/AAC/AIFF）",
+        _gm90.MUSIC_EXTS == {".mp3", ".wav", ".flac", ".m4a", ".aac", ".aiff"})
+    chk("T93 服务器时长探针补三兄弟：dur_mp4/dur_aiff/dur_adts 在 _MUSIC_PROBE_PY 里",
+        "def dur_mp4(" in _gm90_src and "def dur_aiff(" in _gm90_src
+        and "def dur_adts(" in _gm90_src and _gm90_src.count("def dur_") >= 6
+        and "magic[4:8] == b'ftyp'" in _gm90_src
+        and "((magic[1] >> 1) & 3) == 0" in _gm90_src)
     chk("T93 CLI 闸门与游戏端客户端一致（50 首 / 80MB / 1GB）",
         _gm90.MUSIC_MAX_TRACKS == 50 and _gm90.MUSIC_MAX_TRACK_BYTES == 80 * 1024 * 1024
         and _gm90.MUSIC_MAX_TOTAL_BYTES == 1024 * 1024 * 1024)
@@ -7756,8 +7767,9 @@ print(json.dumps({"summary": {"games": games}}))   # 真 solver 末尾必打；r
     chk("T93 GET /api/music 路由在场（离线也要回自洽形状，不 500）",
         '"/api/music"' in gu_src and "def read_music(" in gu_src)
 
-    chk("T93 前端 accept 只放行三种（MIME 一起给，别让 Linux 文件管理器灰掉）",
-        "inp.accept = '.mp3,.wav,.flac,audio/mpeg,audio/wav,audio/x-wav,audio/flac'" in js)
+    chk("T93 前端 accept 放行六格式（MIME 一起给，别让 Linux 文件管理器灰掉）",
+        "inp.accept = '.mp3,.wav,.flac,.m4a,.aac,.aiff,audio/mpeg,audio/wav,audio/x-wav,"
+        "audio/flac,audio/mp4,audio/aac,audio/aiff'" in js)
     chk("T93 前端逐个量时长（Audio loadedmetadata；失败 -1 上报，CLI 会按 0 记）",
         "function audioDuration(" in js and "'loadedmetadata'" in js)
     chk("T93 前端上传走 XHR octet-stream + withCredentials + X-CMSUI（照 webbg 先例，要进度事件）",
@@ -7783,6 +7795,9 @@ print(json.dumps({"summary": {"games": games}}))   # 真 solver 末尾必打；r
     chk("T93 前端上传前二次确认 + 待传清单（选完文件即列单）",
         "确认上架这批歌" in js and "mu-picklist" in js
         and "vetMusicFiles" in js)
+    chk("T93 ★ 上架含 AIFF 时二次确认里必须带兼容性提醒（只有 Safari 能放，建议转 AAC）",
+        "\\.aiff$/i" in js and "只有 Safari 能放" in js
+        and js.index("只有 Safari 能放") > js.index("vetMusicFiles"))
     chk("T93 前端行复选框批量下架（music_rm 逗号连传，一次 ssh 收尾）",
         "下架所选" in js and "state.musicSel" in js
         and "files.join(',')" in js.split("async function doMusic(")[1].split("async function doAdminPasswd")[0])
@@ -7839,6 +7854,27 @@ print(json.dumps({"summary": {"games": games}}))   # 真 solver 末尾必打；r
         and "music_allow" not in _authd_src
         and "IP 每天最多 5 次「完整拉取流程」" in (root / "docs" / "密码闸门.md").read_text(encoding="utf-8"))
 
+    # ── 省帧回归（2026-11-13）：af733bb 的无条件 draw 把「跳过重画」整个架空，
+    #    120Hz 屏静止照样每秒 120 幅全屏重画（用户实测 GPU 66% 抓包）——这种
+    #    「行为测试全绿、GPU 照烧」的 bug 只能靠源码结构断言拦。 ──
+    _gts90 = (root / "web" / "ts" / "game.ts").read_text(encoding="utf-8")
+    _rts90 = (root / "web" / "ts" / "renderer.ts").read_text(encoding="utf-8")
+    _fxts90 = (root / "web" / "ts" / "fx.ts").read_text(encoding="utf-8")
+    _loop90 = _gts90[_gts90.index("const step = (ts: number) => {"):
+                     _gts90.index("else requestAnimationFrame(step);")]
+    chk("省帧 ★ 主循环只有一个 draw 调用点（无条件 draw = 架空跳过重画，af733bb 实锤过）",
+        _loop90.count("this.renderer.draw(hud") == 1
+        and "canSkipDraw(hud, ts)" in _loop90)
+    chk("省帧 ★ 音乐播放/拉取/解锁提示期限 30fps（跑马灯和进度条够平滑）；对局中挂机 1s 后同限，有输入满帧",
+        "ui.playing || ui.fetchProg || ui.unlockHint" in _rts90
+        and "ts - this.lastDrawTs_ < 33" in _rts90
+        and "this.lastDrawTs_ = nowMs" in _rts90
+        and "performance.now() - this.lastAct_ > 1000" in _rts90
+        and "if (hud.phase === Phase.Playing)" in _rts90)
+    chk("省帧 ★ fx 层分时段限帧：平时 30、流星在飞 120（4de5555）",
+        "const kFxMeteorFps = 120" in _fxts90
+        and "meteors.length > 0 ? kFxMeteorFps : kFxMaxFps" in _fxts90)
+
     # ── 第四轮安全审计修复（2026-11-13）：逐条钉住，防回归 ──
     _music_js = js  # gateui app.js 已在 _mu_js 之外另有 js 变量；下面用 split 锚定 web/ts/music.ts
     _wts_music = (root / "web" / "ts" / "music.ts").read_text(encoding="utf-8")
@@ -7885,6 +7921,13 @@ print(json.dumps({"summary": {"games": games}}))   # 真 solver 末尾必打；r
             and _gu90._music_sniff(b"fLaC" + b"\x00" * 16) == ".flac"
             and _gu90._music_sniff(b"\xff\xfb\x90\x00" + b"\x00" * 16) == ".mp3"
             and _gu90._music_sniff(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16) is None)
+        chk("T93 ★ _music_sniff 六格式补验：ftyp→m4a、FORM+AIFF/AIFC→aiff、层位区分 MP3/ADTS AAC",
+            _gu90._music_sniff(b"\x00\x00\x00\x20ftypM4A \x00\x00\x00\x00" + b"\x00" * 16) == ".m4a"
+            and _gu90._music_sniff(b"FORM\x00\x00\x10\x00AIFF" + b"\x00" * 16) == ".aiff"
+            and _gu90._music_sniff(b"FORM\x00\x00\x10\x00AIFC" + b"\x00" * 16) == ".aiff"
+            and _gu90._music_sniff(b"\xff\xf1\x50\x80" + b"\x00" * 16) == ".aac"
+            and _gu90._music_sniff(b"\xff\xf9\x50\x80" + b"\x00" * 16) == ".aac"
+            and _gu90._music_sniff(b"\xff\xfa\x90\x00" + b"\x00" * 16) == ".mp3")
     except Exception as e:
         chk("T93 ★ _music_sniff 五路真验", False, str(e))
 

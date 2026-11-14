@@ -355,14 +355,18 @@ check("五张表都有「客户端」列（三张数据表 + 两张版本历史�
 check("「已发布」的客户端是三份（每平台一份程序字节），不挑一份代表全部",
       "CLIENT_MANIFEST_KEYS" in cu14 and "def _published_client_vers()" in cu14
       and "Object.entries(m).map" in aj14)
-check("distctl status 同一行报两个身份（终端里只看求解器会漏掉半更新）",
+check("distctl status 同一行报全部身份（终端里只看求解器会漏掉半更新；权重轴 nn 任务才带）",
       "线上在跑: " in dt14 and 't.get("client_ver")' in dt14
-      and "求解器 {s} + 客户端 {c} ×{n} 终端" in dt14)
-check("版本历史两个身份**共用一条时间线**：收录条件是「任一身份变了」，去重也按这一对",
+      and 't.get("nn_ver")' in dt14
+      and '"求解器 {s} + 客户端 {c}"' in dt14
+      and '(f" + 权重 {w}" if w else "")' in dt14
+      and 'f" ×{n} 终端"' in dt14)
+check("版本历史三个身份**共用一条时间线**：收录条件是「任一身份变了」，去重也按这一组",
       'CLIENT_VER_PATH = "tools/dist_client.py"' in cu14
-      and "*SOLVER_VER_PATHS, CLIENT_VER_PATH" in cu14
-      and '(keep[-1]["ver"], keep[-1]["client"]) != (e["ver"], e["client"])' in cu14
-      and "e.ver === cur && e.client === curClient" in aj14)
+      and 'WEIGHTS_VER_PATH = "assets/nn/student.cnnw"' in cu14
+      and "*SOLVER_VER_PATHS, CLIENT_VER_PATH, WEIGHTS_VER_PATH" in cu14
+      and '(keep[-1]["ver"], keep[-1]["client"], keep[-1]["weights"]) \\\n                    != (e["ver"], e["client"], e["weights"])' in cu14
+      and "e.ver === cur && e.client === curClient && e.weights === curWeights" in aj14)
 check("客户端自己那一屏也两个身份都报（启动横幅 + 面板 Seed 行）：本机排查不必先去翻服务器",
       'f"（{solver_ver}）"' in dc14 and "客户端 {client_ver() or '未知'}" in dc14
       and 'f"  solver {solver_ver}"' in dc14 and 'f"  client {cv}"' in dc14)

@@ -563,11 +563,21 @@ export class Renderer {
             && !(this.musicUi_ && this.musicUi_.fetchProg);
     }
     /** 静止判定（配合 game 主循环**跳过整幅重画**，帧节奏保持 rAF）：
-     *  画布不出新帧 = 合成器不动 = GPU 归零；对局中豁免（HUD 秒表每秒都在走），
-     *  默认歌单拉取中豁免（进度行 + 放弃钮要跟着字节走）。 */
-    canSkipDraw(hud: Hud): boolean {
-        return this.inputIdle() && hud.phase !== Phase.Playing;
+     *  画布不出新帧 = 合成器不动 = GPU 归零。 */
+    canSkipDraw(hud: Hud, ts: number): boolean {
+        // 对局中：有输入（1s 内动过）满帧跟手；挂机限 30fps（2026-11-13 用户裁决——
+        // 悬停高亮 30fps 肉眼无感，挂机占用砍到 1/4）。HUD 秒表 1Hz，30fps 档照画。
+        if (hud.phase === Phase.Playing)
+            return performance.now() - this.lastAct_ > 1000
+                && ts - this.lastDrawTs_ < 33;
+        const ui = this.musicUi_;
+        // 音乐在播/在拉/解锁提示呼吸：动效**限 30fps**（跑马灯和进度条 30 帧足够平滑，
+        // 120Hz 屏别每帧全幅重画）
+        if (ui && (ui.playing || ui.fetchProg || ui.unlockHint))
+            return ts - this.lastDrawTs_ < 33;
+        return this.inputIdle();
     }
+    private lastDrawTs_ = 0;          // 上次真正落笔画画的 rAF 时间戳（30fps 节流基准）
     private musicHover_ = false;      // 鼠标悬停展开控制条
     private musicTouchT0_ = 0;        // 触摸展开时刻（3s 无操作自动收回）
     private musicTipIdx_ = -1;        // 悬停提示：当前悬停的按钮下标（-1=无）
@@ -2328,6 +2338,7 @@ export class Renderer {
         const dt = this.lastTs_ > 0 ? Math.min(0.25, (nowMs - this.lastTs_) / 1000) : 0;
         this.lastTs_ = nowMs;
         this.nowMs_ = nowMs;
+        this.lastDrawTs_ = nowMs;
 
         if (this.seedStage_ === SeedStage.Menu) this.updateSeedMenuHover(this.mousePx_.x, this.mousePx_.y);
         this.ensureImages();
@@ -3590,6 +3601,20 @@ this.drawPill(kRow.pillY, sx0 + 124, 92, hud.paused ? 'TIME PAUSED' : 'TIME',
 
         box(ctx, P, kPanel, kBtnEdge, 1.8);
         drawTL(ctx, 'SETTINGS', 16, kInk, P.x + 22, P.y + 16);
+        // MUSIC 面板内提示（如「服务器没配默认歌单」）：挂标题右边，5s 墙钟过期
+        //（过期判定在渲染时现算——快照不重推也不能让提示赖着不走）
+        {
+            const pn = this.musicUi_;
+            if (pn && pn.panelNote && Date.now() < pn.panelNoteUntil) {
+                let size = 11;
+                let w = Math.max(96, textWidth(ctx, pn.panelNote, size) + 20);
+                if (w > P.w - 140) { size = 9; w = Math.max(96, textWidth(ctx, pn.panelNote, size) + 20); }
+                const nx = clampI(P.x + P.w - w - 12, P.x + 122, Math.max(P.x + 122, P.x + P.w - w - 12));
+                const rect = R(nx, P.y + 7, w, 24);
+                box(ctx, rect, kRealMine, kRealMine, 0);
+                drawC(ctx, pn.panelNote, size, C(255, 255, 255), rect.x + rect.w / 2, rect.y + rect.h / 2, 0.5);
+            }
+        }
 
         // 一级页签条（固定不滚动）：单击切换下方内容区
         const tabNames = ['INDIVIDUATION', 'CONTROL', 'ANIMATION', 'TIP', 'MUSIC'];

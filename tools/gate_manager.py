@@ -1546,7 +1546,7 @@ MUSIC_MANIFEST_NAME = "manifest.json"
 MUSIC_MAX_TRACKS = 50
 MUSIC_MAX_TRACK_BYTES = 80 * 1024 * 1024
 MUSIC_MAX_TOTAL_BYTES = 1024 * 1024 * 1024
-MUSIC_EXTS = {".mp3", ".wav", ".flac"}
+MUSIC_EXTS = {".mp3", ".wav", ".flac", ".m4a", ".aac", ".aiff"}
 
 
 def music_dir(a) -> str:
@@ -1595,7 +1595,8 @@ def _music_put_manifest(a, tracks: list) -> None:
 
 
 # 服务器端时长探针：纯标准库读音频文件头（FLAC STREAMINFO / WAV fmt+data /
-# MP3 帧头 ± Xing），把 manifest 里浏览器量失败存的 dur=0（界面「?:??」）补成真实值。
+# MP3 帧头 ± Xing / MP4 mvhd / AIFF COMM / AAC ADTS 逐帧），把 manifest 里浏览器量
+# 失败存的 dur=0（界面「?:??」）补成真实值。
 # 为什么在服务器上量：上传时浏览器用 Audio 元素量时长，大文件超时/解码器不认就存 0，
 # 源头重读文件头最可靠，也不用把几十 MB 音频拖回浏览器。只改 dur 字段，其余原样。
 _MUSIC_PROBE_PY = r'''
@@ -1679,13 +1680,80 @@ def dur_mp3(p):
     return None
 
 
+def dur_mp4(p):
+    # MP4/M4A：扫 mvhd 盒（moov 可能在文件尾，直接搜标记）；v0/v1 两种布局
+    with open(p, 'rb') as f:
+        data = f.read()
+    i = data.find(b'mvhd')
+    if i < 0:
+        return None
+    ver = data[i + 4]
+    if ver == 1:
+        ts = int.from_bytes(data[i + 24:i + 28], 'big')
+        du = int.from_bytes(data[i + 28:i + 32], 'big')
+    else:
+        ts = int.from_bytes(data[i + 16:i + 20], 'big')
+        du = int.from_bytes(data[i + 20:i + 24], 'big')
+    return du / ts if ts else None
+
+
+def dur_aiff(p):
+    # AIFF/AIFF-C：COMM 块的 numSampleFrames + 采样率（80 位扩展浮点）
+    with open(p, 'rb') as f:
+        if f.read(12)[8:12] not in (b'AIFF', b'AIFC'):
+            return None
+        while True:
+            ch = f.read(8)
+            if len(ch) < 8:
+                return None
+            cid, csz = ch[:4], int.from_bytes(ch[4:8], 'big')
+            if cid == b'COMM':
+                d = f.read(min(csz, 18))
+                if len(d) < 18:
+                    return None
+                frames = int.from_bytes(d[2:6], 'big')
+                e = int.from_bytes(d[8:10], 'big')
+                m = int.from_bytes(d[10:18], 'big')
+                sr = m / (1 << 63) * (2.0 ** (e - 16383)) if e or m else 0
+                return frames / sr if sr else None
+            f.seek(csz + (csz & 1), 1)
+
+
+def dur_adts(p):
+    # ADTS 裸流 AAC：逐帧头累加（帧长 13 位在头内；每帧 1024 样本）
+    SR = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050,
+          16000, 12000, 11025, 8000, 7350]
+    data = open(p, 'rb').read()
+    frames, sr, pos = 0, 0, 0
+    while pos + 7 <= len(data):
+        if data[pos] != 0xFF or (data[pos + 1] & 0xE0) != 0xE0 or ((data[pos + 1] >> 1) & 3) != 0:
+            pos += 1
+            continue
+        sri = (data[pos + 2] >> 2) & 0x0F
+        if sri > 12:
+            return None
+        sr = SR[sri]
+        flen = ((data[pos + 4] & 0x03) << 11) | (data[pos + 5] << 3) | (data[pos + 6] >> 5)
+        if flen <= 7:
+            return None
+        frames += 1
+        pos += flen
+    return frames * 1024 / sr if frames and sr else None
+
+
 def probe(p):
     with open(p, 'rb') as f:
-        magic = f.read(4)
-    if magic == b'fLaC':
+        magic = f.read(16)
+    if magic[:4] == b'fLaC':
         return dur_flac(p)
     if magic[:4] == b'RIFF':
         return dur_wav(p)
+    if magic[4:8] == b'ftyp':
+        return dur_mp4(p)
+    if magic[:4] == b'FORM' and magic[8:12] in (b'AIFF', b'AIFC'):
+        return dur_aiff(p)
+    if len(magic) >= 2 and magic[0] == 0xFF and (magic[1] & 0xE0) == 0xE0:
+        return dur_adts(p) if ((magic[1] >> 1) & 3) == 0 else dur_mp3(p)
     return dur_mp3(p)
 
 

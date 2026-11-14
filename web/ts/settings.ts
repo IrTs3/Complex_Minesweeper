@@ -48,7 +48,13 @@ export function defaultSettings(): SettingsData {
         starDensity: 2.17,
         starScale: 1.7,
         bgAlpha: 140,
-        background: { dataUrl: '' },
+        // 参赛版（CMS_NO_BG，由 index.html 头脚本置位）不带内置背景图——
+        // 默认给纯色 #66CCFF 而不是空：空=去加载 bg.webp/jpg→404→淡白底，
+        // 且 RESTORE ALL 会把首访种子洗掉，从此每次重置都淡白（2026-11-13 用户实测）。
+        background: {
+            dataUrl: (window as unknown as { CMS_NO_BG?: unknown }).CMS_NO_BG !== undefined
+                ? '#66ccff' : '',
+        },
         marker: [
             { dataUrl: '', ch: '' }, { dataUrl: '', ch: '' },
             { dataUrl: '', ch: '' }, { dataUrl: '', ch: '' }, { dataUrl: '', ch: '' },

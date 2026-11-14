@@ -576,11 +576,12 @@ console.log('\n—— M14 默认歌单首拉（defaultDone 旗标语义）——
 const mdDir = join(new URL('../music-default', import.meta.url).pathname);
 rmSync(mdDir, { recursive: true, force: true });
 mkdirSync(mdDir, { recursive: true });
-makeWav(join(mdDir, 'd1.wav'), 1, 500);
-makeWav(join(mdDir, 'd2.wav'), 1, 700);
+// 夹具文件名必须过 fetchDefault 的 safeStorageName 闸（11-13 审计 aa0f829 起：^t[0-9a-f]+\.ext$）
+makeWav(join(mdDir, 't01.wav'), 1, 500);
+makeWav(join(mdDir, 't02.wav'), 1, 700);
 writeFileSync(join(mdDir, 'manifest.json'), JSON.stringify({ ver: 1, tracks: [
-    { file: 'd1.wav', name: '默认一', size: statSync(join(mdDir, 'd1.wav')).size, dur: 1, added: 1 },
-    { file: 'd2.wav', name: '默认二', size: statSync(join(mdDir, 'd2.wav')).size, dur: 1, added: 2 },
+    { file: 't01.wav', name: '默认一', size: statSync(join(mdDir, 't01.wav')).size, dur: 1, added: 1 },
+    { file: 't02.wav', name: '默认二', size: statSync(join(mdDir, 't02.wav')).size, dur: 1, added: 2 },
 ]}));
 /** 本文档里发往 /music-default/ 的请求（manifest + 音频），旗标语义的探针 */
 const mdPulls = () => evalJs(
@@ -656,19 +657,19 @@ check('M14 ★ 重试去重：manifest 拉了但音频零下载，曲目不重�
     JSON.stringify(await mdPulls()) === '["manifest.json"]',
     `tracks=${m14.tracks.length} pulls=${JSON.stringify(await mdPulls())}`);
 
-// —— M15 首拉进度显示 + 放弃 ——（CDP Fetch 把 d2.wav 扣在 Request 相：d1 已到手入库，
+// —— M15 首拉进度显示 + 放弃 ——（CDP Fetch 把 t02.wav 扣在 Request 相：t01 已到手入库，
 // 正好验证增量语义「第一首落地就出声/入库，不等全单」；拉取窗口稳定，进度行常驻可点）
 console.log('\n—— M15 首拉进度显示 + 放弃（中止+删默认曲+旗标落1）——');
-await send('Fetch.enable', { patterns: [{ urlPattern: '*music-default/d2.wav', requestStage: 'Request' }] });
+await send('Fetch.enable', { patterns: [{ urlPattern: '*music-default/t02.wav', requestStage: 'Request' }] });
 await send('Page.navigate', { url: 'about:blank' });
 await sleep(400);
 await send('Storage.clearDataForOrigin', { origin: 'http://127.0.0.1:8080', storageTypes: 'all' });
 await sleep(200);
-await loadFresh();          // 新玩家：restore 触发首拉，d1 完成入库、d2.wav 被扣住 → 拉取态悬着
+await loadFresh();          // 新玩家：restore 触发首拉，t01 完成入库、t02.wav 被扣住 → 拉取态悬着
 await closeHelp();
 await sleep(2000);
 let m15 = await music();
-check('M15 扣住 d2.wav：首拉进行中 fetchProg 常驻（n=2）',
+check('M15 扣住 t02.wav：首拉进行中 fetchProg 常驻（n=2）',
     m15.fetchProg !== null && m15.fetchProg.n === 2, JSON.stringify(m15.fetchProg));
 check('M15 ★ 增量语义：第一首到手即入库（不等全单拉完）',
     m15.tracks.length === 1 && m15.tracks[0].name === '默认一',
@@ -706,7 +707,7 @@ console.log('\n—— M16 手动下载默认歌单 ——');
 await loadFresh();
 await closeHelp();
 await evalJs(`(async () => {
-  const b = await (await fetch('music-default/d1.wav')).blob();
+  const b = await (await fetch('music-default/t01.wav')).blob();
   await window.__game.player_.addFiles([new File([b], '本地首.wav')]);
 })()`);
 await sleep(600);
@@ -735,7 +736,7 @@ check('M16 手动下载不动旗标（defaultDone 实例+落盘都=1）',
     `flag=${m16.defaultDone}`);
 check('M16 请求口径：manifest + 两首音频都拉了',
     (await mdPulls()).includes('manifest.json') &&
-    (await mdPulls()).includes('d1.wav') && (await mdPulls()).includes('d2.wav'),
+    (await mdPulls()).includes('t01.wav') && (await mdPulls()).includes('t02.wav'),
     JSON.stringify(await mdPulls()));
 
 // —— 配额预检负测：49 首假元数据（25MB×49 ≈ 1.2GB > 1GB）→ 一首都排不进去 ——

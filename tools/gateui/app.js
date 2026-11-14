@@ -3202,7 +3202,7 @@
     function vetMusicFiles(files) {
         const picks = [], bad = [];
         for (const f of files) {
-            if (!/\.(mp3|wav|flac)$/i.test(f.name)) { bad.push(`${f.name}：不是 MP3/WAV/FLAC`); continue; }
+            if (!/\.(mp3|wav|flac|m4a|aac|aiff)$/i.test(f.name)) { bad.push(`${f.name}：不是支持的音频格式（MP3/WAV/FLAC/M4A/AAC/AIFF）`); continue; }
             if (f.size > MUSIC_MAX_BYTES) { bad.push(`${f.name}：${fmtBytes(f.size)} 超单曲上限 80 MB`); continue; }
             picks.push(f);
         }
@@ -3339,7 +3339,7 @@
                 const inp = el('input');
                 inp.type = 'file';
                 inp.multiple = true;
-                inp.accept = '.mp3,.wav,.flac,audio/mpeg,audio/wav,audio/x-wav,audio/flac';
+                inp.accept = '.mp3,.wav,.flac,.m4a,.aac,.aiff,audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/mp4,audio/aac,audio/aiff';
                 inp.id = 'music-pick';
                 const pickList = el('div', 'mu-picklist');
                 inp.addEventListener('change', () => {
@@ -3419,8 +3419,13 @@
             const files = state.pickedMusic || [];
             const total = files.reduce((s, f) => s + f.size, 0);
             const listing = files.map(f => `· ${f.name}（${fmtBytes(f.size)}）`).join('\n');
+            // AIFF 只有 Safari 解得了：推上去 Edge/Chrome 玩家听不到（游戏内会自动跳过并吭声）
+            const aiffs = files.filter(f => /\.aiff$/i.test(f.name));
+            const warn = aiffs.length
+                ? `⚠ 其中 ${aiffs.length} 首 AIFF：只有 Safari 能放，Edge/Chrome 玩家听不到，建议转成 AAC 再推。\n`
+                : '';
             const ok = await confirmDanger('确认上架这批歌',
-                `将逐首上传并上架 ${files.length} 首（共 ${fmtBytes(total)}）：\n${listing}\n`
+                `将逐首上传并上架 ${files.length} 首（共 ${fmtBytes(total)}）：\n${listing}\n${warn}`
                 + '新玩家首开即拉，老玩家不受影响。',
                 '上传并上架');
             if (!ok) return;

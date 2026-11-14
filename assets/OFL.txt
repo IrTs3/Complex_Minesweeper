@@ -1,0 +1,13 @@
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+This license is available with a FAQ at: https://scripts.sil.org/OFL
+
+Copyright 2020 The IBM Plex Project (https://github.com/IBM/plex)
+
+This bundle contains: IBM Plex Serif (Regular), licensed under the
+SIL Open Font License, Version 1.1.
+  - assets/IBMPlexSerif-Regular.ttf  (full font, desktop bundles)
+  - web/assets/ibmplex-ascii.woff2   (subsetted copy: printable ASCII + ± √)
+  - web/assets/IBMPlexSerif-Regular.ttf (copy for web fallback)
+
+The subsetted woff2 is a Modified Version of the Font Software as defined
+by the License; it is redistributed under the same SIL OFL 1.1 terms.

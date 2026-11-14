@@ -1280,7 +1280,7 @@ def _webbg_sniff(raw: bytes) -> str | None:
     return None
 
 
-# 默认歌单只收三种（2026-11-12 用户裁决）：MP3 / WAV / FLAC。
+# 默认歌单收六种（2026-11-12 用户裁决 MP3/WAV/FLAC；2026-11-14 追加 M4A/AAC/AIFF）。
 # 魔数照旧双验——只看扩展名等于让调用方自称是什么。
 _MUSIC_MAGIC = (
     (b"ID3", ".mp3"),
@@ -1291,12 +1291,20 @@ _MUSIC_MAGIC = (
 def _music_sniff(raw: bytes) -> str | None:
     if raw[:4] == b"RIFF" and raw[8:12] == b"WAVE":
         return ".wav"
+    # MP4 容器（M4A/AAC）：ftyp 盒在偏移 4（前 4 字节是大端盒长）
+    if raw[4:8] == b"ftyp":
+        return ".m4a"
+    # AIFF / AIFF-C（IFF 家族大端块头）：统一落 .aiff
+    if raw[:4] == b"FORM" and raw[8:12] in (b"AIFF", b"AIFC"):
+        return ".aiff"
     for magic, ext in _MUSIC_MAGIC:
         if raw.startswith(magic):
             return ext
-    # MP3 裸流（无 ID3 头）：帧同步字 0xFF + 0b111xxxxx（MPEG 音频层位）
+    # MPEG 音频裸流（无 ID3 头）：帧同步字 0xFF + 0b111xxxxx（MPEG 音频层位）。
+    # 层位区分 MP3 与 ADTS AAC：layer=00 是 ADTS（MP3 是 01/10/11）——
+    # 两者的 11 位同步字重叠，只看同步字会把 AAC 误存成 .mp3。
     if len(raw) >= 2 and raw[0] == 0xFF and (raw[1] & 0xE0) == 0xE0:
-        return ".mp3"
+        return ".aac" if (raw[1] >> 1) & 3 == 0 else ".mp3"
     return None
 
 
@@ -2117,11 +2125,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     d = save_webbg_upload(self.state,
                                           str(body.get("data_url") or ""),
                                           sniff=_music_sniff, prefix="music-",
-                                          what="音频", magic_hint="mp3 / wav / flac")
+                                          what="音频", magic_hint="mp3 / wav / flac / m4a / aac / aiff")
                 else:
                     d = save_webbg_stream(self.state, self.rfile, n,
                                           sniff=_music_sniff, prefix="music",
-                                          what="音频", magic_hint="mp3 / wav / flac")
+                                          what="音频", magic_hint="mp3 / wav / flac / m4a / aac / aiff")
             except ApiError as e:
                 return self._fail(e.status, e.message)
             except OSError as e:

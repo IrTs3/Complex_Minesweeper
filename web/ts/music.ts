@@ -48,15 +48,20 @@ export interface MusicUiState {
     fetchProg: MusicFetchProg | null;
     /** 自动播放等待解锁的提示（''=没有；画在 ♪ 控制条上方，点击后消失） */
     unlockHint: string;
+    /** 面板内提示（如「没配默认歌单」）：画在设置面板顶栏，until=过期时刻（epoch ms） */
+    panelNote: string;
+    panelNoteUntil: number;
 }
 
 // 容量闸门（2026-11-12 用户点名：无损友好）：单曲 80MB / 50 首 / 总量 1GB
 const kMaxTrackBytes = 80 * 1024 * 1024;
 const kMaxTracks = 50;
 const kMaxTotalBytes = 1024 * 1024 * 1024;
-// 服务器默认歌单（cmsui「默认歌单」上架的）只发这三种，File 包装时用
+// 服务器默认歌单（cmsui「默认歌单」上架的）File 包装时的 MIME 路由表；
+// 本地导入（audiopick）的 accept 是 audio/*，不经过这张表。
 const kDefaultMime: Record<string, string> = {
-    '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.flac': 'audio/flac'
+    '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.flac': 'audio/flac',
+    '.m4a': 'audio/mp4', '.aac': 'audio/aac', '.aiff': 'audio/aiff'
 };
 // 视频入库（2026-11-12 追加）：只收音频轨——解码提取存 16bit WAV（无损），
 // 大小闸按提取后的 WAV 算；输入文件先探时长估体积，超闸不白解一遍。
@@ -244,6 +249,8 @@ export class MusicPlayer {
     private unlocking_ = false;
     private mutedByUs_ = false;   // 自动播放被拒后我们自己的静音（区别于音量=0）；手势解锁时撤
     private unlockHint_ = '';     // 画在 ♪ 控制条上方的解锁提示（''=没有；go() 里清）
+    private unsupportedStreak_ = 0; // 连续「放不了」自动跳的曲数；够一轮全失败就停播防死循环
+    private panelNote_: { msg: string; until: number } | null = null; // 面板顶栏提示（墙钟 5s，不走顶部横幅）
 
     /** 拒绝/提示走这里（game.ts 注入 renderer.setSeedNote） */
     note: (msg: string) => void = () => { };
@@ -261,6 +268,9 @@ export class MusicPlayer {
         a.addEventListener('pause', () => { this.persist(); this.onChange(); });
         a.addEventListener('play', () => this.onChange());
         a.addEventListener('ended', () => { this.lastPlayedId_ = this.curId_; this.next(true); });
+        // 解码成功的曲目清零连跳计数（整单不支持时据此停播）
+        a.addEventListener('loadedmetadata', () => { this.unsupportedStreak_ = 0; });
+        a.addEventListener('error', () => this.onAudioError());
         // 切页/关页前把进度落盘：timeupdate 的 3s 节流可能刚好没赶上
         const flush = () => this.persist();
         document.addEventListener('visibilitychange', () => { if (document.hidden) flush(); });
@@ -343,10 +353,36 @@ export class MusicPlayer {
         if (autoplay) await this.tryPlay();
     }
 
+    /** 浏览器解不了当前曲（code 4 = SRC_NOT_SUPPORTED，如 Chromium 放 AIFF）：播着就跳下一首并吭声；
+     *  连跳够一轮还不行=整单都不支持，停播防死循环；暂停态只吭声不挪指针。 */
+    private onAudioError(): void {
+        const a = this.audio_;
+        if (!this.curId_ || !a.error || a.error.code !== 4) return; // 4=MEDIA_ERR_SRC_NOT_SUPPORTED；中断/网络错不归这管
+        const meta = this.tracks_.find(t => t.id === this.curId_);
+        const name = meta ? meta.name : '这首歌';
+        if (this.wasPlaying_) {
+            this.unsupportedStreak_ += 1;
+            if (this.unsupportedStreak_ >= Math.max(1, this.pass_.length)) {
+                this.wasPlaying_ = false;
+                this.note('MUSIC · 歌单里的曲子这个浏览器都放不了，已停止播放（常见原因：AIFF 等 Safari 专属格式）');
+                this.persist();
+            } else {
+                this.note('MUSIC · 「' + name + '」的音频格式这个浏览器放不了，已跳到下一首');
+                this.next(true);
+                return;
+            }
+        } else {
+            this.note('MUSIC · 「' + name + '」的音频格式这个浏览器放不了');
+        }
+        this.onChange();
+    }
+
     private async tryPlay(): Promise<void> {
         try {
             await this.audio_.play();
-        } catch {
+        } catch (err) {
+            // 解码不支持（如 Chromium 放 AIFF）：error 监听会接管跳歌，别落进下面的自动播放误诊
+            if (err instanceof DOMException && err.name === 'NotSupportedError') return;
             // 自动播放策略拒绝：不清 wasPlaying（意图仍在）。先试**静音起播**——
             // 静音态 Chrome/Safari 都放行，进度/时长照常走，不卡在原地；
             // 第一次手势解除静音出声。静音也被拒才退回纯等待的老路。
@@ -679,6 +715,12 @@ export class MusicPlayer {
             items.push({ file: t.file, disp, ext });
         }
         if (!items.length) {
+            if (bad) {
+                // 全是坏条目 ≠ 全部已入库：不能落旗标（落了就永不重试），吭声让管理员能看见
+                this.note('MUSIC · 默认歌单 manifest ' + bad + ' 条全都不合规（命名须为 t<十六进制>.<扩展名>），没拉');
+                this.onChange();
+                return;
+            }
             // 全部已入库（半途失败后的重试形态）：落旗标，别白烧明天的拉取额度
             this.defaultDone_ = true;
             this.persist();
@@ -699,6 +741,8 @@ export class MusicPlayer {
         this.fetchNames_ = items.map(it => (it.disp + it.ext).replace(/\.[^.]+$/, ''));
         this.fetchProg_ = { i: 0, n: items.length, name: '', loaded: 0, total: 0 };
         this.onChange(); // renderer 只在 onChange 收快照：拉取态一开始就得吭声，否则进度行永远不出现
+        // 结果话术分渠道：首拉时面板多半没开走顶部横幅；手动下载在面板里发起，回面板顶栏
+        const emit = (msg: string) => { if (mode === 'first') this.note(msg); else this.setPanelNote(msg); };
         let addedAny = false;
         for (let i = 0; i < items.length; ++i) {
             const it = items[i];
@@ -714,12 +758,12 @@ export class MusicPlayer {
                 // ⚠️ endFetch 会清 fetchNames_，「放弃」清理要按名单删曲——必须先清理再收状态
                 if (aborted) {
                     if (mode === 'first') this.abortDefaultCleanup(); // 删已入库 + 旗标落 1（用户裁决，内部自带 endFetch）
-                    else { this.endFetch(); this.note('MUSIC · 已停止手动下载（已入库的保留）'); }
+                    else { this.endFetch(); this.setPanelNote('MUSIC · 已停止手动下载（已入库的保留）'); }
                     return 'aborted';
                 }
                 this.endFetch();
                 this.onChange();
-                this.note(mode === 'first'
+                emit(mode === 'first'
                     ? 'MUSIC · 默认歌单没拉全（' + it.disp + ' 下载失败），已入库的保留，下次打开接着试'
                     : 'MUSIC · 手动下载中断（' + it.disp + ' 下载失败），已入库的保留');
                 return 'failed';
@@ -752,13 +796,19 @@ export class MusicPlayer {
             this.defaultDone_ = true;
             this.persist();
             this.onChange();
-            this.note('MUSIC · 已放弃默认歌单下载，不再自动拉取（想再拉就清站点数据）');
+            this.setPanelNote('MUSIC · 已放弃默认歌单下载，不再自动拉取（想再拉就清站点数据）');
         })();
     }
 
     /** 用户点「放弃」（设置面板 MUSIC 页）。没在拉就 no-op。 */
     abortDefaultFetch(): void {
         if (this.fetchAbort_) this.fetchAbort_.abort();
+    }
+
+    /** 面板顶栏提示（设置面板开着才看得见，5s 墙钟过期）：面板里发起的动作结果走这里，别去抢顶部横幅 */
+    setPanelNote(msg: string): void {
+        this.panelNote_ = { msg, until: Date.now() + 5000 };
+        this.onChange();
     }
 
     /** 手动拉取默认歌单（MUSIC 页「下载歌单」钮；二次确认在 renderer/game 层）。
@@ -768,14 +818,14 @@ export class MusicPlayer {
      *  第一首落地即出声；「放弃」中止 = 已入库的保留（不再是整批作废）。
      *  自动拉取进行中禁止手动（按钮置灰 + fetchAbort_ 代码闸）。 */
     async manualDownload(): Promise<void> {
-        if (this.fetchAbort_) { this.note('MUSIC · 已有下载在进行（先等它跑完或点放弃）'); return; }
+        if (this.fetchAbort_) { this.setPanelNote('MUSIC · 已有下载在进行（先等它跑完或点放弃）'); return; }
         let manifest: { tracks?: Array<{ file?: unknown; name?: unknown; size?: unknown }> };
         try {
             const r = await fetch('music-default/manifest.json');
-            if (r.status === 404) { this.note('MUSIC · 服务器没配默认歌单（或今日清单拉取次数已用完）'); return; }
-            if (!r.ok) { this.note('MUSIC · 清单拉取失败（HTTP ' + r.status + '）'); return; }
+            if (r.status === 404) { this.setPanelNote('MUSIC · 服务器没配默认歌单（或今日清单拉取次数已用完）'); return; }
+            if (!r.ok) { this.setPanelNote('MUSIC · 清单拉取失败（HTTP ' + r.status + '）'); return; }
             manifest = await r.json();
-        } catch { this.note('MUSIC · 清单拉取失败（网络不通）'); return; }
+        } catch { this.setPanelNote('MUSIC · 清单拉取失败（网络不通）'); return; }
         const raw = (manifest && manifest.tracks) as unknown;
         const list = Array.isArray(raw) ? raw : [];
         const stripExt = (s: string) => s.replace(/\.[^.]+$/, '');
@@ -800,13 +850,13 @@ export class MusicPlayer {
             return true;
         });
         if (!queue.length) {
-            this.note('MUSIC · 没有能入库的曲子：' + (skip.length
+            this.setPanelNote('MUSIC · 没有能入库的曲子：' + (skip.length
                 ? skip.slice(0, 2).join('；') + (skip.length > 2 ? ' 等' : '')
                 : '默认歌单是空的'));
             return;
         }
         const r = await this.pullDefault(queue, 'manual');
-        if (r === 'done' && skip.length) this.note('MUSIC · 配额不足跳过 ' + skip.length + ' 首：' +
+        if (r === 'done' && skip.length) this.setPanelNote('MUSIC · 配额不足跳过 ' + skip.length + ' 首：' +
             skip.slice(0, 2).join('；') + (skip.length > 2 ? ' 等' : ''));
     }
 
@@ -929,7 +979,9 @@ export class MusicPlayer {
             barX: this.barX_,
             barY: this.barY_,
             fetchProg: this.fetchProg_,
-            unlockHint: this.unlockHint_
+            unlockHint: this.unlockHint_,
+            panelNote: this.panelNote_ && Date.now() < this.panelNote_.until ? this.panelNote_.msg : '',
+            panelNoteUntil: this.panelNote_ ? this.panelNote_.until : 0
         };
     }
 

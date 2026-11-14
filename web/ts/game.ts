@@ -1793,11 +1793,12 @@ export class Game {
                 phase: this.phase_,
                 paused: this.focusPaused_
             };
-            this.renderer.draw(hud, ts);
             // 静止省帧：画布没人动就跳过整幅重画（帧节奏保持 rAF，定时器/tooltip 全不受影响）；
             // 任何输入/音乐状态变化都会 bumpAct 把画面拉回来。隐藏页签用 33ms 定时器兜底。
+            // ⚠️ 这里**不能有**无条件 draw——af733bb 曾把它留在原地，跳过机制整个被架空
+            //   （120Hz 屏静止照样每秒 120 幅全屏重画，2026-11-13 用户实测 GPU 66% 抓包）。
             if (document.hidden) setTimeout(() => step(performance.now()), 33);
-            else if (!this.renderer.canSkipDraw(hud)) this.renderer.draw(hud, ts);
+            else if (!this.renderer.canSkipDraw(hud, ts)) this.renderer.draw(hud, ts);
             requestAnimationFrame(step);
         };
         if (document.hidden) setTimeout(() => step(performance.now()), 33);
