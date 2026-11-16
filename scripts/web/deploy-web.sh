@@ -138,8 +138,42 @@ grep -q "\./game\.js?v=${BUILD}" "$STAGE/dist/main.js" \
     || { echo "  ✗ main.js 的子模块 import 未挂版本号，缓存击穿失败" >&2; exit 1; }
 echo "  ✓ 入口 + 子模块 import 均已挂 v=${BUILD}"
 
+# 1c) 学习站缓存击穿：/learn/ 的静态资源走 immutable 长缓存（加固清单 §46），
+#     版本号 = learn 目录内容的 sha（内容不变 → URL 不变 → 长缓存照常命中，不浪费带宽）。
+#     index.html 不带版本号也不许长缓存（nginx 侧单独一条 location 强制 no-cache）：
+#     它是唯一入口，每次回源校验拿到新 HTML，新 HTML 引用新 ?v= → 旧缓存天然失效。
+#     manifest.js 头部注入 LEARN_VER，app.js 懒加载 pages/*.js 时拼同一个 ?v=
+#     （否则子页不在 index.html 里，改版后 immutable 会把旧页钉死一个月）。
+#     与上面游戏 dist 同理：改写只发生在 $STAGE，源码树保持干净。
+#     对每文件哈希表再哈希一次（xargs shasum 多文件出多行，直接截前 8 位会得到
+#     多行值，sed 的模式里塞进换行直接报错——本地干跑踩过）。
+LEARN_VER="$(find "$WEB_DIR/learn" -type f ! -name '.DS_Store' | sort | xargs shasum | shasum | cut -c1-8)"
+case "$LEARN_VER" in
+  [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) : ;;
+  *) echo "  ✗ LEARN_VER 形状不对（期望 8 位十六进制，实际：${LEARN_VER}）—— 哈希管线变了？" >&2; exit 1 ;;
+esac
+echo "==> 学习站缓存击穿：v=${LEARN_VER}"
+cp -R "$WEB_DIR/learn" "$STAGE/learn"
+find "$STAGE/learn" -name '.DS_Store' -delete
+# index.html 的相对引用全挂 ?v=（style.css / ghs.png / manifest.js / highlight.js / search.js / app.js）；
+# 页脚的外链（beian.miit.gov.cn 等）不是纯路径，天然不匹配这条正则
+sed -i.bak -E "s#((src|href)=\"[A-Za-z0-9_./-]+\.(css|js|png))\"#\1?v=${LEARN_VER}\"#g" "$STAGE/learn/index.html"
+rm -f "$STAGE/learn/index.html.bak"
+{ printf "window.LEARN_VER='%s';\n" "$LEARN_VER"; cat "$STAGE/learn/manifest.js"; } > "$STAGE/learn/manifest.js.new"
+mv "$STAGE/learn/manifest.js.new" "$STAGE/learn/manifest.js"
+# 断言：改写必须真发生，宁可部署失败也不静默发不可失效的 URL
+grep -q "manifest\.js?v=${LEARN_VER}" "$STAGE/learn/index.html" \
+    || { echo "  ✗ learn/index.html 未挂版本号，学习站缓存击穿失败" >&2; exit 1; }
+grep -q "style\.css?v=${LEARN_VER}" "$STAGE/learn/index.html" \
+    || { echo "  ✗ learn/index.html 样式表未挂版本号" >&2; exit 1; }
+grep -q "window.LEARN_VER='${LEARN_VER}'" "$STAGE/learn/manifest.js" \
+    || { echo "  ✗ manifest.js 未注入 LEARN_VER，懒加载页拿不到版本号" >&2; exit 1; }
+grep -q 'LEARN_VER' "$WEB_DIR/learn/app.js" \
+    || { echo "  ✗ app.js 不消费 LEARN_VER —— 重部署后 pages/*.js 会被 immutable 钉死旧版" >&2; exit 1; }
+echo "  ✓ 学习站入口 + manifest 注入均带 v=${LEARN_VER}"
+
 # 2) 建目录并同步文件
-#    index.html 与 dist 从改写副本 $STAGE 同步（带 ?v=BUILD）；style.css/assets/gate 用原始文件。
+#    index.html、dist 与 learn 从改写副本 $STAGE 同步（带版本号）；style.css/assets/gate 用原始文件。
 echo "==> 同步文件"
 $SSH "$SERVER" "mkdir -p '$REMOTE_DIR'"
 # --delete-excluded：单靠 --delete 不会删接收端被排除的文件，旧的 *.map / *.d.ts 得靠它清掉
@@ -150,7 +184,7 @@ rsync -az --delete --delete-excluded --exclude='*.map' --exclude='*.d.ts' --excl
     --filter='P music-default/' \
     -e "ssh -p ${SSH_PORT} -o BatchMode=yes -o ConnectTimeout=10" \
     "$STAGE/index.html" "$WEB_DIR/style.css" "$STAGE/dist" "$WEB_DIR/assets" "$WEB_DIR/gate" \
-    "$WEB_DIR/learn" \
+    "$STAGE/learn" \
     "$SERVER:$REMOTE_DIR/"
 
 # 3) 远端 nginx 配置（独立 server block + 两个 snippet，不碰默认站点）
@@ -275,6 +309,8 @@ server {
     server_name @@DOMAIN@@ www.@@DOMAIN@@;
 
     server_tokens off;
+    # 同 443 块：80 上乱路径扫描的 open() 噪音不进 error_log（log_not_found 只管 error_log）
+    log_not_found off;
     include /etc/nginx/snippets/cms-security-headers.conf;
 
     # ACME http-01：80 上唯一还 serving 内容的路径。
@@ -354,6 +390,12 @@ server {
 
     # 不回显 nginx 版本号（默认会带 nginx/1.24.0 (Ubuntu)，等于给扫描器报版本）
     server_tokens off;
+
+    # log_not_found off（实测 2026-11-16）：try_files 打不到文件时不往 **error_log** 写
+    # open() 失败行——那些行带完整 URI（T61 的教训），是扫描器洪水最吵的部分。
+    # ★ 它不管 access.log：404 状态行仍会进 access.log（~120B/条，daily+rotate14+compress
+    #   兜底；要连这个也掐需 access_log 的 if= 按 status 过滤，另议）。
+    log_not_found off;
 
     # ---- 抗滥用 ----
     # 单 IP 20 请求/秒，突发 40 个立即放行（首屏只要 13 个请求，正常用户碰不到上限）
@@ -511,8 +553,23 @@ server {
     # try_files **绝不**回退 /index.html：那会把受闸门保护的游戏 HTML
     # 从公开路径泄漏出去；学习站缺文件就该老老实实 404。
     location = /learn { return 301 /learn/; }
-    location ^~ /learn/ {
+    # 学习站缓存策略（加固清单 §46）：静态资源 immutable 长缓存 + 入口 no-cache。
+    # 击穿靠 deploy-web.sh 的 LEARN_VER 版本号：内容变了 URL 变，旧缓存命不中。
+    # index.html 是唯一不带版本号的入口，必须每次回源校验——它 immutable 的话
+    # 新版本永远到不了浏览器。/learn/ 与 /learn/index.html 两条 no-cache 是两个入口。
+    # ⚠ 嵌套 location 里 add_header 会整体覆盖父块 → 每条都要自己 include 安全头。
+    location = /learn/ {
         add_header Cache-Control "no-cache" always;
+        include /etc/nginx/snippets/cms-security-headers.conf;
+        try_files $uri $uri/ =404;
+    }
+    location ^~ /learn/ {
+        location = /learn/index.html {
+            add_header Cache-Control "no-cache" always;
+            include /etc/nginx/snippets/cms-security-headers.conf;
+            try_files $uri =404;
+        }
+        add_header Cache-Control "public, max-age=2592000, immutable" always;
         include /etc/nginx/snippets/cms-security-headers.conf;
         try_files $uri $uri/ =404;
     }
@@ -1202,6 +1259,24 @@ $SSH "$SERVER" "
     fi
     echo '    ✓ 学习站公开可达且不含游戏 DOM'
 
+    # —— 学习站缓存头：静态资源 immutable 长缓存（省回源），入口必须 no-cache ——
+    # 与上面「受保护资源不许缓存」是同一条铁律的两面：公开面靠 ?v= 击穿 + 长缓存省带宽；
+    # 入口一旦 immutable，重部署后浏览器永远拿不到新 HTML，?v= 就永远传不下去。
+    echo '  学习站缓存头检查:'
+    lcc=\$(tcurl http://localhost:${PORT}/learn/app.js -I | grep -i '^cache-control:' | tr -d '\\r' || true)
+    printf '    %-32s %s\n' '/learn/app.js（未登录）' \"\${lcc:-（无 Cache-Control）}\"
+    case \"\$lcc\" in
+      *immutable*) : ;;
+      *) echo \"    ✗ /learn/app.js 缺 immutable —— 学习站静态资源白耗回源带宽（nginx /learn/ location 没换上？）\" >&2; exit 1 ;;
+    esac
+    icc=\$(tcurl http://localhost:${PORT}/learn/ -I | grep -i '^cache-control:' | tr -d '\\r' || true)
+    printf '    %-32s %s\n' '/learn/ 入口（未登录）' \"\${icc:-（无 Cache-Control）}\"
+    case \"\$icc\" in
+      *no-cache*) : ;;
+      *) echo \"    ✗ /learn/ 入口必须 no-cache —— immutable 会让重部署后的新版本永远到不了浏览器\" >&2; exit 1 ;;
+    esac
+    echo '    ✓ 学习站：静态 immutable + 入口 no-cache'
+
     # —— 鉴权服务可达（否则谁都登不进去）——
     if curl -s -o /dev/null -f http://127.0.0.1:8090/health; then
         echo '    ✓ 鉴权服务 /health 正常'
@@ -1308,6 +1383,7 @@ for f in index.html style.css dist/main.js dist/game.js dist/renderer.js \
          learn/highlight.js learn/search.js learn/app.js; do
     case "$f" in
         index.html|dist/*) LP="$STAGE/$f" ;;
+        learn/index.html|learn/manifest.js) LP="$STAGE/$f" ;;
         *)                 LP="$WEB_DIR/$f" ;;
     esac
     L=$(shasum -a 256 "$LP" | cut -c1-16)

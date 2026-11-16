@@ -346,7 +346,15 @@ text
 - 测试网页版交互用 `web/test/cdp-interaction.mjs`（CDP 派发**真实**鼠标 / 键盘事件，零第三方依赖；合成事件不触发默认动作，复现不了焦点类 bug）。脚本自带产物新鲜度检查（dist 必须比 ts 新）。注意 `boardChord` **自身就会把邻居翻开**（副作用），所以「邻居被翻开」不能用来判定返回码 —— 必须断言 `doChord` 走了哪个分支（成功不提示 / 被阻挡提示 `BAD MARKS`）。桌面端没有 GUI 自动化框架，行为类改动可用 env 门控自检（在渲染循环里按帧号触发并打印状态，验证后删除）实测。
 - **种子明文解析必须两端同规格**（2026-10-22 安全审计 P11）：桌面端此前是**手写扫描器**（`seedJsonField` / `seedJsonIntClamped` / `seedJsonStringArray`），它把 `"cols": 9.5` 静默**回退成默认值 9**；网页端用 `JSON.parse` 得到 `NaN`（`NaN < 5` 与 `NaN > 300` 都是 false，`seedIsSane` 全是比较式判断、没有 `Number.isFinite` 兜底 → NaN 全部通过）→ **同一颗种子串在两端解出不同棋盘**，排行榜回放校验的地基就塌了。现在两端统一：桌面端改用 `src/core/SeedJson.h`（递归下降的严格 JSON 解析器，语义对齐 V8 `JSON.parse`：拒绝尾随垃圾 / 尾随逗号 / 前导零 / `+1` / `NaN`，重复键取后者且位置保持首次，深度上限 200），网页端补齐 `Number.isFinite` + `Number.isInteger` 检查；**契约统一为 fail-closed —— 字段存在但类型 / 值不合法就整条拒收，绝不静默回退默认值、绝不产生 NaN**。另有「扁平形状」规则（禁止嵌套容器）消掉两端深度上限差异造成的判定分歧。行为一致性由 `web/test/seed-parse-parity.mjs` 与 `tools/seedparse.cpp` **逐字节对拍**钉死（30 例，含 8 类修复前的分歧点）；**改任一端解析逻辑都必须重跑这条闸门**。
 
-## 十一、第三方依赖与版权
+## 十一、许可证与第三方依赖
+
+**本仓库许可证（双证）：**
+
+- **仓库整体：[MIT](../LICENSE)**——游戏、闸门、管理工具、学习站、部署脚本等，自由使用 / 修改 / 分发，保留版权声明即可
+- **例外（GPL-3.0）：求解器及其工具链**——`src/solver/`、`tools/solver.cpp`、`tools/nn/`、`assets/nn/`、`web/src/solver_api.cpp`、`web/ts/solverworker.ts`、`docs/求解器第四代报告.md`。分发这些内容的衍生品须同样以 GPL-3.0 开源（全文见 [`src/solver/LICENSE`](../src/solver/LICENSE)）
+- third_party/ 与随包字体各随其源许可，见下
+
+**第三方依赖与版权：**
 
 - **SFML 3.0.2**（zlib 许可）——窗口 / 渲染 / 输入
 - **FreeType 2.13.2**（FreeType License，与 zlib 兼容）——字形光栅化
@@ -565,4 +573,4 @@ bash scripts/dist/deploy-dist.sh                                               #
 - `docs/项目结构.txt` —— 2026-10-13 的历史快照（**已被 `docs/项目结构说明.md` 取代**，仅作对照）
 - `docs/CLION-交叉编译配置.md` —— CLion 的 Windows 交叉编译工具链与 CMake Profile 设置
 
-LICENSE 尚未选定，正式发布前补充。
+- 许可证：见 [LICENSE](../LICENSE)（MIT 为主，求解器及其工具链 GPL-3.0，详见上文第十一章）

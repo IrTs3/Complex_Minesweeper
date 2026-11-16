@@ -1,0 +1,45 @@
+MIT License
+
+Copyright (c) 2026 IrTs3 (Complex Minesweeper / 复数扫雷)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+--------------------------------------------------------------------------
+
+SCOPE EXCEPTION / 许可范围例外
+
+This MIT license covers the entire repository EXCEPT the minesweeper
+solver and its toolchain, which are licensed under the GNU General Public
+License v3.0 (see src/solver/LICENSE). GPL-covered paths:
+
+本 MIT 许可证覆盖本仓库全部内容，**除**求解器及其工具链外——该部分以
+GNU General Public License v3.0 授权（全文见 src/solver/LICENSE）：
+
+  - src/solver/                     求解器本体
+  - tools/solver.cpp                求解器命令行入口
+  - tools/nn/                       NN 臂训练/导出/评估流水线
+  - assets/nn/                      NN 权重产物
+  - web/src/solver_api.cpp          网页端 WASM 桥接
+  - web/ts/solverworker.ts          网页端求解 Worker
+  - docs/求解器第四代报告.md        方法论报告
+
+Third-party dependencies under third_party/ and assets/IBMPlexSerif-Regular.ttf
+retain their own licenses (zlib / FreeType License / libpng / SIL OFL 1.1).
+
+第三方依赖（third_party/ 与随包字体）各自保留其原有许可证。

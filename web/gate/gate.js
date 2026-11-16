@@ -20,16 +20,15 @@
   var BTN_LABEL = btn ? btn.textContent : '';
 
   // 服务端给的原因 → 说给用户的话。
-  // **必须分开**：被停用/已过期如果也显示「密码不正确」，用户会一直重试一个永远不会通过的密码，
-  // 然后跑来问「密码是不是坏了」。这四种原因对应 authd 里的 R_* 常量。
+  // 对外只有两条（2026-11-16 收敛）：服务端把 disabled/expired 收敛成 bad_password
+  // 才回给客户端——密码状态不外露，被停用的访客看到的就是「密码不正确」。
+  // 未列出的原因一律落回 bad_password（也挡掉走原型链的奇怪键名，见下）。
   // ★ 无原型对象（2026-10-21 安全审计 P10）：MSG 是普通对象时 `MSG[reason]`
   //   会走原型链，服务端若回 "constructor"/"toString" 就会把函数源码显示在错误行里
   //   （只是文本、不解析 HTML，但那不该出现在登录页上）。
   var MSG = Object.assign(Object.create(null), {
     bad_password: '密码不正确，请重试',
-    throttled: '尝试过于频繁，请等一会儿再试',
-    disabled: '这个密码已被停用，请找管理员换一个',
-    expired: '这个密码已过期，请找管理员换一个'
+    throttled: '尝试过于频繁，请等一会儿再试'
   });
 
   function show(msg) { err.textContent = msg || ''; }

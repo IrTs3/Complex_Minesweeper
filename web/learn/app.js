@@ -240,7 +240,10 @@
     injected[a.id] = true;
     articleEl.innerHTML = '<p class="loading">正在加载「' + esc(a.title) + '」…</p>';
     var sc = document.createElement('script');
-    sc.src = a.file;
+    // LEARN_VER 由部署脚本注入 manifest.js（index.html 引 manifest.js 时已带 ?v=），
+    // 跟着挂上保证 pages/*.js 的 immutable 缓存在重部署后失效；本地 file:// 没有
+    // LEARN_VER，后缀为空串，URL 与源文件一致。
+    sc.src = a.file + (window.LEARN_VER ? '?v=' + window.LEARN_VER : '');
     sc.onload = function () {
       if (window.LEARN.has(a.id)) onReady();
       else articleEl.innerHTML = '<div class="error-box">页面「' + esc(a.title) + '」加载后未注册内容。</div>';

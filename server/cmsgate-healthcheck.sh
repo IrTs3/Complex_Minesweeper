@@ -2,7 +2,7 @@
 # 复数扫雷闸门探活 + Healthchecks「死人开关」ping。
 #
 # 由 cmsgate-healthcheck.timer 每 2 分钟触发一次（oneshot）。逻辑：
-#   · 十三项探活全绿  → 清零失败计数，向 Healthchecks 发一个成功 ping（BASE）。
+#   · 十六项探活全绿  → 清零失败计数，向 Healthchecks 发一个成功 ping（BASE）。
 #   · 任一项失败    → 记一笔连续失败计数；连续第 2 轮仍失败才发 /fail + 写 journal
 #                     （单次抖动不告警，2026-11-06 astrbot 探测一次瞬时 000 误报后加的），
 #                     然后 exit 0（已告警，不必再让 systemd 报 failed）。
@@ -221,7 +221,125 @@ lcode=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:${WEB_PORT
 curl -s -m 5 "http://127.0.0.1:${WEB_PORT}/learn/" 2>/dev/null | grep -q 'C++ 数据结构与算法图解' \
     || ping_fail "/learn/ 返回 200 但标题标记缺失（可能被兜底页顶掉，或首页改版没同步这里）"
 
-# 14) 服务器专属扩展段（QQbot 探活等，不进仓库）：独立文件、存在即加载。加载点放在
+# 14)~16) 慢刀子基线三项（资源层加固 ④，2026-11-16）。慢刀子（日志塞盘、带宽饥饿、
+#     响应劣化）的共性是**不宕机**：进程全绿、端口全通、磁盘不满 —— 前 13 项一条都抓不到，
+#     症状只会是「用户觉得变慢了」和「月底账单变厚」。所以这里不设固定阈值，全部跟
+#     **滚动基线**（EMA，α=0.05 ≈ 最近 20 轮 ≈ 40 分钟的加权平均）对比，突增倍数超限才报。
+#     基线存 BASELINE_DIR/baseline.env（key=value，脚本自产自销，部署时预建目录、
+#     unit 里 ReadWritePaths 只对这个目录开口）。★ 目录必须在 /opt/cmsgate（root 属主）
+#     下、不能放 /var/lib/cmsgate —— 本 unit 剥了全部 capabilities，root 没有
+#     CAP_DAC_OVERRIDE，穿不进 cmsgate 用户 700 的 /var/lib/cmsgate（2026-11-07 读
+#     gateconfig.json 就是这个坑，基线目录 11-16 首部署又踩了一次，自测 WARN 实锤）。三项都要「先攒样本再武装」：
+#     样本 <720 轮（约 24h）只采集不告警 —— 冷启动的 EMA 还没收敛，拿它当基准必误报。
+#     每项还各有一个绝对地板（50ms / 100MB/h / 15Mbit/s）：基线本身极低时（凌晨零增长）
+#     「3 倍」毫无意义，地板才是防误报的最后一道。#39 的资源层版：这三项上线后 ⑥ 的
+#     实弹自打要能看见它们读数变化、打完要能自愈，否则等于没装。
+BASELINE_DIR=/opt/cmsgate/baseline
+BASELINE=$BASELINE_DIR/baseline.env
+if [ ! -d "$BASELINE_DIR" ] && ! mkdir -p "$BASELINE_DIR" 2>/dev/null; then
+    echo "WARN: 基线目录 ${BASELINE_DIR} 不存在且建不了（unit 沙箱没开口？）——第 14~16 项本轮跳过"
+else
+    [ -r "$BASELINE" ] && . "$BASELINE"
+    state_flush() {
+        # 原子写：先落 .tmp 再 mv，断电/中断不会留下半个状态文件（半个文件 source 进来就是垃圾）
+        cat > "$BASELINE.tmp" <<EOF
+LAST_TS=${LAST_TS:-0}
+LAST_USEDKB=${LAST_USEDKB:-0}
+LAST_TX=${LAST_TX:-0}
+LAT_EMA=${LAT_EMA:-0}
+LAT_N=${LAT_N:-0}
+D_EMA=${D_EMA:-0}
+D_N=${D_N:-0}
+TX_EMA=${TX_EMA:-0}
+TX_N=${TX_N:-0}
+EOF
+        mv "$BASELINE.tmp" "$BASELINE"
+    }
+    if ! state_flush; then
+        echo "WARN: 基线文件 ${BASELINE} 写不进 —— 第 14~16 项退化为本轮只读，不积累基线也不告警"
+    fi
+
+    # 14) 响应延迟 p90：对真实内容页 /learn/ 连取 5 次取最大值（5 个样本的 p90≈最大值，
+    #     故意取保守端）。必须用真实尺寸页面：小响应探针（~几百字节）在带宽被压测时
+    #     根本测不出劣化 —— frp-dad 压测实测 2.18s（探针）vs 3.87s（真实页），小探针假阴。
+    #     ★ 成败要按 curl 退出码判，不能用 `lt=$(curl…) || lt=""`：curl 失败时 -w 照样
+    #       输出（0.000000），`||` 一执行就把它覆盖成空 —— 采样永远凑不满 5 个，
+    #       while 无上限空转，oneshot 挂死（本地干跑实锤过）。上限 8 次 = 再加一道保险。
+    lat_p90=""
+    lats=""
+    li=0
+    tries=0
+    while [ "$li" -lt 5 ] && [ "$tries" -lt 8 ]; do
+        tries=$((tries + 1))
+        lt=$(curl -s -m 5 -o /dev/null -w '%{time_total}' "http://127.0.0.1:${WEB_PORT}/learn/" 2>/dev/null)
+        rc=$?
+        case "$lt" in
+            ''|*[!0-9.]*) ;;  # 非数值样本丢弃
+            *) [ "$rc" -eq 0 ] && { lats="$lats $lt"; li=$((li+1)); } ;;
+        esac
+    done
+    if [ "$li" -eq 5 ]; then
+        lat_p90=$(printf '%s\n' $lats | sort -n | tail -n 1)
+        if [ "${LAT_N:-0}" -ge 1 ]; then
+            LAT_EMA=$(awk -v e="${LAT_EMA:-0}" -v s="$lat_p90" 'BEGIN{printf "%.3f", e*0.95+s*0.05}')
+        else
+            LAT_EMA=$lat_p90
+        fi
+        LAT_N=$(( ${LAT_N:-0} + 1 ))
+        if [ "$LAT_N" -lt 720 ]; then
+            echo "基线采集中（延迟）：n=${LAT_N}/720，本轮 p90=${lat_p90}s EMA=${LAT_EMA}s —— 满约 24h 才开始判红"
+        elif awk -v s="$lat_p90" -v e="$LAT_EMA" 'BEGIN{exit !(s>3*e && e>0.05)}'; then
+            ping_fail "响应延迟突增：/learn/ p90=${lat_p90}s（滚动基线 ${LAT_EMA}s，>3 倍且基线地板 50ms）—— 慢刀子：带宽被压 / 连接被占满 / 被打挂前兆"
+        fi
+    else
+        echo "WARN: 延迟采样 5 次只成功 ${li} 次（curl 失败/超时）—— 本轮不计入基线、不判红"
+    fi
+
+    # 15/16) 磁盘增速与出站速率：同一次时间戳差分（脚本 2 分钟一轮，间隔 <60s 的手动重跑
+    #     会得到纯噪音差分，直接跳过本轮不更新基线）。
+    now=$(date +%s)
+    used_kb=$(df -k / | awk 'NR==2{print $3}')
+    tx_bytes=$(grep -v ':lo' /proc/net/dev 2>/dev/null | awk '{sub(/^[^:]+:/,""); s+=$10} END{printf "%.0f", s+0}')
+    if [ "${LAST_TS:-0}" -gt 0 ] && [ $((now - LAST_TS)) -ge 60 ]; then
+        dt=$((now - LAST_TS))
+        # 磁盘增速 MB/h（可为负：logrotate 压缩/删除也是真实基线的一部分）
+        d_rate=$(awk -v u="$used_kb" -v lu="$LAST_USEDKB" -v dt="$dt" 'BEGIN{printf "%.2f", (u-lu)/1024/(dt/3600)}')
+        if [ "${D_N:-0}" -ge 1 ]; then
+            D_EMA=$(awk -v e="${D_EMA:-0}" -v s="$d_rate" 'BEGIN{printf "%.2f", e*0.95+s*0.05}')
+        else
+            D_EMA=$d_rate
+        fi
+        D_N=$(( ${D_N:-0} + 1 ))
+        if [ "$D_N" -lt 720 ]; then
+            echo "基线采集中（磁盘）：n=${D_N}/720，本轮 ${d_rate} MB/h EMA=${D_EMA} —— 满约 24h 才开始判红"
+        elif awk -v s="$d_rate" -v e="$D_EMA" 'BEGIN{exit !(s>5*e && s>100)}'; then
+            ping_fail "磁盘增速异常：+${d_rate} MB/h（滚动基线 ${D_EMA} MB/h，>5 倍且 >100MB/h 地板）—— 慢刀子：日志洪水 / 被塞盘，盘满时第 5 项才亮已太迟"
+        fi
+        # 出站速率 Mbit/s。计数器回绕（tx < 上次值）说明网卡重启/换过，本轮差分作废只记新值。
+        if [ "$tx_bytes" -ge "$LAST_TX" ]; then
+            tx_rate=$(awk -v t="$tx_bytes" -v lt="$LAST_TX" -v dt="$dt" 'BEGIN{printf "%.2f", (t-lt)*8/1000000/dt}')
+            if [ "${TX_N:-0}" -ge 1 ]; then
+                TX_EMA=$(awk -v e="${TX_EMA:-0}" -v s="$tx_rate" 'BEGIN{printf "%.2f", e*0.95+s*0.05}')
+            else
+                TX_EMA=$tx_rate
+            fi
+            TX_N=$(( ${TX_N:-0} + 1 ))
+            if [ "$TX_N" -lt 720 ]; then
+                echo "基线采集中（出站）：n=${TX_N}/720，本轮 ${tx_rate} Mbit/s EMA=${TX_EMA} —— 满约 24h 才开始判红"
+            elif awk -v s="$tx_rate" -v e="$TX_EMA" 'BEGIN{exit !(s>3*e && s>15)}'; then
+                ping_fail "出站速率异常：${tx_rate} Mbit/s（滚动基线 ${TX_EMA}，>3 倍且 >15Mbit/s 地板）—— 慢刀子：带宽被拉满，正常用户已在挨饿（固定带宽就是钱，云侧账单告警之外的应用视角）"
+            fi
+        else
+            echo "SKIP: 出站计数器回绕（${tx_bytes} < ${LAST_TX}）—— 网卡重启过，本轮差分作废"
+        fi
+    fi
+    LAST_TS=$now
+    LAST_USEDKB=$used_kb
+    LAST_TX=$tx_bytes
+    state_flush || echo "WARN: 基线文件写回失败 —— 下轮差分从零开始，磁盘/出站两项要重新攒样本"
+fi
+
+# 17) 服务器专属扩展段（QQbot 探活等，不进仓库）：独立文件、存在即加载。加载点放在
 #     全部本体检查之后、发 ping 之前——扩展段直接复用本体的 ping_fail/BACKUP_DIR。
 #     deploy-monitor.sh 只覆盖本文件、永不碰扩展文件，「覆盖式更新丢 bot 检查」的老坑
 #     从结构上消除；扩展段里任何一项挂，照常 ping_fail。
@@ -236,4 +354,4 @@ hc_url | curl -fsS -m 10 -o /dev/null -K - \
 
 ok_extra=""
 [ -f /opt/cmsgate/healthcheck-extra.sh ] && ok_extra="（含 QQbot 扩展段）"
-echo "OK: 十三项探活全绿${ok_extra}，已发成功 ping"
+echo "OK: 十六项探活全绿${ok_extra}，已发成功 ping"

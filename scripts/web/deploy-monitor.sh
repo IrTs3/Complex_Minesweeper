@@ -2,7 +2,7 @@
 # 部署「闸门存活监控」——Healthchecks 出站死人开关（dead man's switch）。
 #
 # 服务器上的 systemd 定时器每 2 分钟跑一次 healthcheck.sh：
-#   · 十三项探活全绿 + 服务器专属扩展段（QQbot 探活 = 第 14 项，独立文件 /opt/cmsgate/
+#   · 十六项探活全绿 + 服务器专属扩展段（QQbot 探活 = 第 17 项，独立文件 /opt/cmsgate/
 #     healthcheck-extra.sh，不进仓库；本脚本只覆盖本体、永不碰扩展文件，
 #     旧版本体若带 QQbot 段会在部署时自动迁出成扩展文件）
 #     → 向 Healthchecks 发一个成功 ping。
@@ -91,24 +91,40 @@ $SSH "$SERVER" "
     touch ${APP_DIR}/healthcheck-fails
     chown root:root ${APP_DIR}/healthcheck-fails && chmod 600 ${APP_DIR}/healthcheck-fails
     echo \"  ✓ 失败计数文件在位：\$(stat -c '%a %U:%G' ${APP_DIR}/healthcheck-fails)\"
+    # 慢刀子三项（14~16）的 EMA 基线目录同理预建；unit 对这个**目录**开口（脚本原子写 .tmp+mv）。
+    # ★ 必须在 /opt/cmsgate（root 属主）下，不能放 /var/lib/cmsgate —— unit 沙箱剥了全部
+    #   capabilities，root 没有 CAP_DAC_OVERRIDE，穿不进 cmsgate 用户 700 的那个目录。
+    # ★ 历史基线必须活着跨过部署：目录用 mkdir -p + 只改权限，绝不 rm —— 否则每次部署
+    #   都清零样本，720 轮（约 24h）的武装进度永远走不完。
+    install -d -m 700 /opt/cmsgate/baseline
+    chown root:root /opt/cmsgate/baseline
+    echo \"  ✓ 基线目录在位：\$(stat -c '%a %U:%G' /opt/cmsgate/baseline)\"
+    if [ -f /opt/cmsgate/baseline/baseline.env ]; then
+        echo \"  ✓ 既有基线保留：\$(grep -c . /opt/cmsgate/baseline/baseline.env) 行状态（样本数不清零）\"
+    else
+        echo '  · 基线尚无样本（首次部署或首轮未攒满）—— 14~16 项将开始 24h 采集，期间只采不告警'
+    fi
     # 语法先过再谈上线：本体是 cron 之外的静默件，写坏了每 2 分钟失败一次而页面只会变红。
     sh -n ${APP_DIR}/healthcheck.sh || { echo '    ✗ 本体语法坏了，中止部署（旧版备份在 healthcheck.sh.prev）' >&2; exit 1; }
     echo '  ✓ 本体 sh -n 通过'
-    # 扩展段（QQbot = 线上第 14 项）在不在，部署时要吭声：不在就是服务器专属段丢了。
+    # 扩展段（QQbot = 线上第 17 项）在不在，部署时要吭声：不在就是服务器专属段丢了。
     if [ -f ${APP_DIR}/healthcheck-extra.sh ]; then
         echo \"  ✓ 扩展段在位：\$(stat -c '%a %U:%G' ${APP_DIR}/healthcheck-extra.sh) ${APP_DIR}/healthcheck-extra.sh\"
-        # 本体从九项加到十三项，扩展段里那行编号注释得跟着改口径（它现在实际是第 14 项）。
+        # 本体从九项加到十六项，扩展段里那行编号注释得跟着改口径（它现在实际是第 17 项）。
         # 只动这一行注释，绝不碰它下面的检查内容；不是这个形状就原样留着并吭声。
         if sed -n '/^# 10) QQbot/p' ${APP_DIR}/healthcheck-extra.sh | grep -q .; then
-            sed -i 's/^# 10) QQbot/# 14) QQbot/' ${APP_DIR}/healthcheck-extra.sh
-            echo '  ✓ 扩展段编号注释 # 10) → # 14)（只改注释，检查内容未动）'
+            sed -i 's/^# 10) QQbot/# 17) QQbot/' ${APP_DIR}/healthcheck-extra.sh
+            echo '  ✓ 扩展段编号注释 # 10) → # 17)（只改注释，检查内容未动）'
+        elif sed -n '/^# 14) QQbot/p' ${APP_DIR}/healthcheck-extra.sh | grep -q .; then
+            sed -i 's/^# 14) QQbot/# 17) QQbot/' ${APP_DIR}/healthcheck-extra.sh
+            echo '  ✓ 扩展段编号注释 # 14) → # 17)（本体加到十六项后顺移，只改注释）'
         else
-            grep -q '^# 14) QQbot' ${APP_DIR}/healthcheck-extra.sh \\
-                && echo '  · 扩展段编号已是 # 14)，无需改' \\
-                || echo '  · 扩展段没有「# 10) QQbot」这行注释（可能自建形状），编号未动' >&2
+            grep -q '^# 17) QQbot' ${APP_DIR}/healthcheck-extra.sh \\
+                && echo '  · 扩展段编号已是 # 17)，无需改' \\
+                || echo '  · 扩展段没有编号注释行（可能自建形状），编号未动' >&2
         fi
     else
-        echo '  · 无扩展段（本机线上只跑仓库这十三项）'
+        echo '  · 无扩展段（本机线上只跑仓库这十六项）'
     fi
     # 保险杠：旧版本体里带 QQbot 段而扩展文件还没有 → 从备份抽出来落成独立文件。
     # 迁移之后本体随便覆盖，QQbot 段永远躺在 healthcheck-extra.sh 里不被碰。
@@ -142,7 +158,7 @@ echo "==> 启用并启动 cmsgate-healthcheck.timer"
 $SSH "$SERVER" "systemctl enable --now cmsgate-healthcheck.timer && echo '  timer 已 enable --now'"
 
 # ---- 5) 强制自测（任一不过即 exit 1）----
-echo "==> 自测 1/4：手动跑一次探活（**只看本轮**日志必须出现 OK:，证明十三项全绿 + 出站 ping 通）"
+echo "==> 自测 1/4：手动跑一次探活（**只看本轮**日志必须出现 OK:，证明十六项全绿 + 出站 ping 通）"
 $SSH "$SERVER" "
     set -e
     # 为什么不能只看退出码、也不能 grep -n 20：ping_fail 是**故意** exit 0 的（已告警就不必
@@ -157,7 +173,7 @@ $SSH "$SERVER" "
     [ \"\$status\" = 0 ] || { echo '    ✗ 探活脚本自身异常退出（非「某项判红」：那种情况按设计退 0）' >&2; exit 1; }
     echo \"\$out\" | grep -q '^OK:' \\
         || { echo '    ✗ 本轮探活没出现 OK:（有项判红：FAIL: = 已发失败信号，FAIL(待确认) = 连续第 1 次还不发）' >&2; exit 1; }
-    echo '  ✓ 本轮十三项全绿 + 成功 ping 已发出'
+    echo '  ✓ 本轮十六项全绿 + 成功 ping 已发出'
 "
 
 echo "==> 自测 2/4：定时器 active，且能看到下次触发时间"

@@ -21,7 +21,10 @@
   var TY = {}; TYPES.forEach(function (t) { TY[t] = 1; });
 
   function esc(s) {
-    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    // 引号也转：当前输出只进元素上下文（innerHTML 的 <pre>），引号无害；
+    // 但转上零成本，日后谁把高亮结果塞进属性上下文也不会被打穿（2026-11-16 审计遗留项）。
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
   // 合并正则：注释 | 预处理 | 字符串/字符 | 数字 | 标识符 | 标点。顺序即优先级。

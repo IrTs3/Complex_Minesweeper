@@ -3644,11 +3644,12 @@ def run_tests(srv: Server, port: int, tok: str, state_dir: Path) -> None:
         and dw_src.count("# landing-mode: game") >= 1)
     chk("T50 ★ nginx：^~ /learn/ 公开块存在，且 try_files 不回退 /index.html（防泄漏游戏 HTML）",
         "location ^~ /learn/" in dw_src
-        and re.search(r"location \^~ /learn/ \{[^}]*try_files \$uri \$uri/ =404;", dw_src, re.S)
+        and re.search(r"location \^~ /learn/ \{(?:[^{}]|\{[^{}]*\})*try_files \$uri \$uri/ =404;", dw_src, re.S)
         and "location = /learn { return 301 /learn/; }" in dw_src)
-    chk("T50 ★ nginx：根路径改成 include landing 片段；rsync 带上了 learn 目录",
+    chk("T50 ★ nginx：根路径改成 include landing 片段；rsync 带上了 learn 目录"
+        "（T63 起走 $STAGE 改写副本）",
         "include /etc/nginx/snippets/cms-landing-root.conf;" in dw_src
-        and '"$WEB_DIR/learn"' in dw_src)
+        and '"$STAGE/learn" \\' in dw_src)
     # .map 与 .d.ts 浏览器从不请求；--delete 不会删接收端被排除的文件，
     # 少了 --delete-excluded，旧部署带上去的这两类会一直留在线上。
     chk("T50 ★ rsync 不上传 *.map / *.d.ts，且用 --delete-excluded 清掉历史残留",
@@ -3998,8 +3999,8 @@ def run_tests(srv: Server, port: int, tok: str, state_dir: Path) -> None:
         and 'tok = os.environ.get("GATE_TOKEN", "")' in serve_src
         and "if a.gate and not loopback and not tok:" in serve_src
         and "必须显式给入口 token" in serve_src)
-    chk("T54 ★ 文档同步：探活项数按「仓库十三项 / 服务器十四项」写准 + 片段进快照 + 302 的理由",
-        "十三项探活" in gu_doc and "服务器版十四项" in gu_doc
+    chk("T54 ★ 文档同步：探活项数按「仓库十六项 / 服务器十七项」写准 + 片段进快照 + 302 的理由",
+        "十六项探活" in gu_doc and "服务器版十七项" in gu_doc
         and "秘密登录入口必须" in gu_doc
         and "`return 302`，不是 301" in gu_doc and "另外还收一份" in gu_doc
         and "快照里没有它" not in gu_doc)
@@ -4025,17 +4026,21 @@ def run_tests(srv: Server, port: int, tok: str, state_dir: Path) -> None:
     chk("T55 ★ ?e= 这条通道在 authd 里已经没有任何残留（不跳 /gate/、编号表已删）",
         "E_BY_REASON" not in authd_src and 'location="/gate/' not in authd_src
         and "REASON_ZH" in authd_src)
-    chk("T55 ★ 四条拒绝原因齐，且与 gate.js 的 MSG **逐字**相等（两条路不能显示成两句话）",
+    chk("T55 ★ 对外拒绝原因收敛为两条（密码错/限流），与 gate.js 的 MSG **逐字**相等",
         _nojs is not None
-        and all(k in authd_src for k in ("R_BAD_PW", "R_THROTTLED", "R_DISABLED", "R_EXPIRED"))
         and all(v in authd_src and f"'{v}'" in gatejs for v in
-                ("密码不正确，请重试", "尝试过于频繁，请等一会儿再试",
-                 "这个密码已被停用，请找管理员换一个", "这个密码已过期，请找管理员换一个")))
+                ("密码不正确，请重试", "尝试过于频繁，请等一会儿再试")))
+    chk("T55 ★ 密码状态不外露：停用/过期话术在 authd 与 gate.js 的对外面上消失，"
+        "真实原因只进 usage.jsonl（R_DISABLED/R_EXPIRED 常量仍在，管理员侧照常区分）",
+        "这个密码已被停用" not in authd_src and "这个密码已过期" not in authd_src
+        and "已被停用" not in gatejs and "已过期" not in gatejs
+        and "R_DISABLED" in authd_src and "R_EXPIRED" in authd_src
+        and "shown = reason if reason in (R_BAD_PW, R_THROTTLED) else R_BAD_PW" in authd_src)
     chk("T55 ★ 节流那句两边都带具体秒数（只说「等一会儿」用户会以为密码坏了）",
         "尝试过于频繁，请等 {retry} 秒后再试" in authd_src
         and "'尝试过于频繁，请等 ' + r.retry + ' 秒后再试'" in gatejs)
     chk("T55 ★ 非 fetch 分支发 401/429 + text/html + Retry-After，正文走 nojs_page()",
-        "nojs_page(reason_sentence(reason, retry))" in authd_src
+        "nojs_page(reason_sentence(shown, retry))" in authd_src
         and 'ctype="text/html; charset=utf-8"' in authd_src
         and '"Retry-After"' in authd_src and "429 if retry else 401" in authd_src)
     chk("T55 ★ 内联页没有 <style>/style=/内联 <script>（继承的 CSP 会把它们静默拦掉）",
@@ -4611,6 +4616,64 @@ def run_tests(srv: Server, port: int, tok: str, state_dir: Path) -> None:
         "`listen 8080;` 就是 0.0.0.0:8080，等于留一条永远明文的入口",
         "listen 127.0.0.1:@@PORT@@" in _main and "listen [::1]:@@PORT@@" in _main
         and "\n    listen @@PORT@@;" not in _main and "\n    listen [::]:@@PORT@@;" not in _main)
+
+    # ── T62：404 日志洪水（资源层①，2026-11-16）──────────────────────────
+    # log_not_found 默认 on：try_files 打不到文件时往 error_log 写带完整 URI 的
+    # open() 失败行（T61 的教训），扫描器洪水最吵的部分。关掉后 error_log 安静；
+    # ★ 它不管 access.log——404 状态行仍落盘，注释必须写清这个边界，防止后人
+    # 误以为「404 已经不写任何日志」而跳过 access_log 侧的量。
+    chk("T62 ★ log_not_found off 两个 server 块各关一次，且写在 server 级"
+        "（location 级只护一条路径，其他 404 路径照样漏）",
+        dw_src.count("\n    log_not_found off;") == 2
+        and "log_not_found off;" in _b1)
+    chk("T62 ★ 注释写明作用边界是 error_log 而非 access.log（防误读成「404 零落盘」）",
+        "不往 **error_log** 写" in dw_src
+        and "它不管 access.log" in dw_src
+        and "80 上乱路径扫描的 open() 噪音不进 error_log" in dw_src)
+
+    # ── T63：学习站 immutable 长缓存（资源层③，2026-11-16）────────────────
+    # /learn/ 静态资源 public, max-age=2592000, immutable + 入口 no-cache；击穿靠
+    # LEARN_VER（learn 目录内容 sha 截 8 位）。三条不变量缺一不可：
+    # ① 版本号来自**内容**而非时间——内容不变 URL 不变，回访者长缓存照常命中（§46 的本意）；
+    # ② app.js 懒加载 pages/*.js 必须消费 LEARN_VER——子页不在 index.html 引用里，
+    #    漏了它，重部署后 16 篇正文被 immutable 钉死一个月；
+    # ③ index.html 本体永远 no-cache——它是唯一不带版本号的入口，immutable 的入口
+    #    等于把新版本关在门外，?v= 永远传不下去。
+    learn_app = (root / "web" / "learn" / "app.js").read_text(encoding="utf-8")
+    learn_idx = (root / "web" / "learn" / "index.html").read_text(encoding="utf-8")
+    chk("T63 ★ LEARN_VER 来自 learn 内容哈希（find|sort|xargs shasum），不是时间戳——"
+        "内容不变则 URL 不变，长缓存照常命中",
+        'LEARN_VER="$(find "$WEB_DIR/learn" -type f' in dw_src
+        and "| sort | xargs shasum" in dw_src
+        and "| cut -c1-8)" in dw_src)
+    chk("T63 ★ 改写发生在 $STAGE：先 cp 进去，rsync 上传的是改写副本，源码树不被版本号污染",
+        'cp -R "$WEB_DIR/learn" "$STAGE/learn"' in dw_src
+        and '"$STAGE/learn" \\' in dw_src)
+    chk("T63 ★ index.html 相对引用挂 ?v= 的 sed 存在（.css/.js/.png 三类，外链天然不匹配）",
+        r's#((src|href)=\"[A-Za-z0-9_./-]+\.(css|js|png))\"#\1?v=${LEARN_VER}\"#g' in dw_src)
+    chk("T63 ★ manifest.js 头部注入 window.LEARN_VER（app.js 懒加载 pages/*.js 靠它拼 ?v=）",
+        '{ printf "window.LEARN_VER=\'%s\';\\n" "$LEARN_VER"' in dw_src
+        and "grep -q \"window.LEARN_VER='${LEARN_VER}'\" \"$STAGE/learn/manifest.js\"" in dw_src)
+    chk("T63 ★ 部署脚本断言 app.js 真消费 LEARN_VER（忘了改 app.js = 16 篇正文被 immutable 钉死）",
+        "grep -q 'LEARN_VER' \"$WEB_DIR/learn/app.js\"" in dw_src
+        and "window.LEARN_VER ? '?v=' + window.LEARN_VER : ''" in learn_app)
+    chk("T63 ★ 改写后必须自查三处：入口 html 的 manifest/style 都带 ?v=（宁可部署失败也不静默发不可失效 URL）",
+        'grep -q "manifest\\.js?v=${LEARN_VER}" "$STAGE/learn/index.html"' in dw_src
+        and 'grep -q "style\\.css?v=${LEARN_VER}" "$STAGE/learn/index.html"' in dw_src)
+    chk("T63 ★ 源码树 index.html 保持干净（不带 ?v=——版本号只活在 $STAGE）",
+        "?v=" not in learn_idx)
+    chk("T63 ★ nginx：静态资源 immutable 长缓存（30 天）+ 两条入口 no-cache（/learn/ 与 /learn/index.html）",
+        'add_header Cache-Control "public, max-age=2592000, immutable" always;' in dw_src
+        and re.search(r"location = /learn/ \{[^}]*no-cache", dw_src, re.S)
+        and re.search(r"location = /learn/index\.html \{[^}]*no-cache", dw_src, re.S)
+        and dw_src.count('try_files $uri =404;') >= 1)
+    chk("T63 ★ 线上自测：immutable 与 no-cache 都拿真实响应头验证（配置文本会骗人，头不会）",
+        "/learn/app.js 缺 immutable" in dw_src
+        and "/learn/ 入口必须 no-cache" in dw_src
+        and "静态 immutable + 入口 no-cache" in dw_src)
+    chk("T63 ★ 校验和比对：learn/index.html 与 learn/manifest.js 比的是 $STAGE 改写副本"
+        "（线上跑的就是改写版，比源码版永远不一致）",
+        'learn/index.html|learn/manifest.js) LP="$STAGE/$f"' in dw_src)
     # 配置文本会骗人（改一行就绿），真实 socket 不会 —— 所以拿 ss 当判据。
     chk("T61 ★ 自测拿 `ss -ltn` 抓真实监听判「有没有非回环的 8080」，"
         "并另验回环上确实有（删掉监听的话探活第 4/6 项和这段自测的基准一起断）",
@@ -4714,17 +4777,55 @@ def run_tests(srv: Server, port: int, tok: str, state_dir: Path) -> None:
     chk("T62 ★ 第 7 项只碰公钥证书，绝不读私钥（.key 600 root；而 ping_fail 的文本会经 "
         "/fail **发给第三方监控服务**，脚本一旦打印或引用私钥路径就是往外送）",
         ".key" not in hc_src)
-    chk("T62 ★ 项数文案三处同步（脚本文案、部署自测、文档表格）—— 旧的「六项/七项/八项/九项探活」"
-        "必须绝迹：探活说自己绿而实际没测，是最难查的那种谎（仓库脚本 13 项=cmsdist + 11-02 补的"
-        " sshd/fail2ban+chrony/内存/learn，服务器 14 项=另有 QQbot bot 段，QQbot 不进仓库）",
-        "十三项探活全绿" in hc_src and "六项探活" not in hc_src and "七项探活" not in hc_src
-        and "八项探活" not in hc_src and "九项探活" not in hc_src
-        and "十三项探活全绿" in _dm and "六项探活" not in _dm and "七项探活" not in _dm
-        and "八项探活" not in _dm and "九项探活" not in _dm
+    # 旧项数（六/七/八/九/十三/十四项探活）必须绝迹——但「十六项探活」里含子串
+    # 「六项探活」、「十七项探活」里含「七项探活」，裸 substring 检查会被新数字误伤
+    # （改十六项当天实锤），所以要否定环视：前面不能是中文数字。
+    _stale_probe = re.compile(r"(?<![十六七八九三四二一])[六七八九]项探活|十三项探活|十四项探活")
+    chk("T62 ★ 项数文案三处同步（脚本文案、部署自测、文档表格）—— 旧的「六项/七项/八项/九项/十三项/十四项探活」"
+        "必须绝迹：探活说自己绿而实际没测，是最难查的那种谎"
+        "（仓库脚本 16 项 = 原 13 项 + 11-16 资源层④慢刀子基线三项；"
+        "服务器 17 项 = 另有 QQbot bot 段，QQbot 不进仓库）",
+        "十六项探活全绿" in hc_src and not _stale_probe.search(hc_src)
+        and "十六项探活全绿" in _dm and not _stale_probe.search(_dm)
         and "| 7 |" in gu_doc and "| 8 |" in gu_doc and "| 9 |" in gu_doc
         and "| 10 |" in gu_doc and "| 13 |" in gu_doc and "| 14 |" in gu_doc
-        and "六项探活" not in gu_doc and "七项探活" not in gu_doc
-        and "八项探活" not in gu_doc and "九项探活" not in gu_doc)
+        and "| 15 |" in gu_doc and "| 16 |" in gu_doc and "| 17 |" in gu_doc
+        and not _stale_probe.search(gu_doc))
+
+    # ── T62：慢刀子基线三项 14/15/16（资源层④，2026-11-16）────────────────
+    # 不设固定阈值、全跟 EMA 滚动基线对比；三个不能省的护栏：未武装（<720 轮）只采不报、
+    # 绝对地板防「低基线 × 3 倍 = 噪音」、状态文件原子写（半个文件 source 进来就是垃圾）。
+    _svc62 = (root / "server" / "cmsgate-healthcheck.service").read_text(encoding="utf-8")
+    chk("T62 ★ 慢刀子三项全走 EMA（α=0.05）滚动基线，不设固定阈值——固定阈值要么误报要么太迟",
+        "e*0.95+s*0.05" in hc_src and hc_src.count("EMA=") >= 3)
+    chk("T62 ★ 三项都先武装后判红：样本 <720 轮（约 24h）只采集，EMA 未收敛时当基准必误报",
+        hc_src.count('-lt 720') == 3 and "满约 24h 才开始判红" in hc_src)
+    chk("T62 ★ 三个绝对地板一个不少（50ms / 100MB/h / 15Mbit/s）——凌晨零增长时「3 倍」毫无意义",
+        "s>3*e && e>0.05" in hc_src and "s>5*e && s>100" in hc_src and "s>3*e && s>15" in hc_src)
+    chk("T62 ★ 延迟采样用真实内容页 /learn/ 取 5 次（小探针在带宽压测下假阴——frp-dad 实测 "
+        "2.18s vs 真实页 3.87s），失败样本丢弃且采样不足要吭声不静默",
+        "${WEB_PORT}/learn/" in hc_src and "'%{time_total}'" in hc_src
+        and "只成功 ${li} 次" in hc_src)
+    chk("T62 ★ 采样成败按 curl 退出码判 + 尝试上限 8 次——`lt=$(curl…) || lt=\"\"` 会把失败时"
+        "照样输出的 -w 值覆盖成空，采样永远凑不满 5 个、while 无上限空转，oneshot 挂死"
+        "（本地干跑实锤过）",
+        "rc=$?" in hc_src and "-lt 8" in hc_src and '[ "$rc" -eq 0 ]' in hc_src)
+    chk("T62 ★ 基线状态原子写（.tmp + mv）且写失败要吭声降级（半个状态文件 source 进来就是垃圾）",
+        'cat > "$BASELINE.tmp"' in hc_src and 'mv "$BASELINE.tmp" "$BASELINE"' in hc_src
+        and "退化为本轮只读" in hc_src)
+    chk("T62 ★ 短间隔差分防噪：距上次 <60s 的手动重跑不更新基线；出站计数器回绕作废本轮差分",
+        '-ge 60' in hc_src and '计数器回绕' in hc_src)
+    chk("T62 ★ unit 给基线目录开口（不是单文件——脚本原子写要造 .tmp），目录必须放 root 属主的"
+        "/opt/cmsgate 下（沙箱无 CAP_DAC_OVERRIDE，穿不进 cmsgate 用户 700 的 /var/lib/cmsgate——"
+        "首部署自测 WARN 实锤）；部署脚本预建目录且**不清历史样本**（清零 = 24h 武装进度永远走不完）",
+        "ReadWritePaths=-/opt/cmsgate/baseline" in _svc62
+        and "BASELINE_DIR=/opt/cmsgate/baseline" in hc_src
+        and "install -d -m 700 /opt/cmsgate/baseline" in _dm
+        and "样本数不清零" in _dm
+        and "/var/lib/cmsgate/baseline" not in hc_src + _svc62 + _dm + gu_doc)
+    chk("T62 ★ 扩展段编号顺移到 17（本体 14~16 被慢刀子占用；部署脚本支持 10→17 与 14→17 两种旧形状）",
+        "# 17) 服务器专属扩展段" in hc_src
+        and 's/^# 10) QQbot/# 17) QQbot/' in _dm and 's/^# 14) QQbot/# 17) QQbot/' in _dm)
     chk("T62 ★ 文档同步：第 7 项写清了「读本地 PEM 而非线上 TLS」的理由 + 14 天阈值的由来",
         "本地 PEM 里的到期日" in gu_doc and "acme.sh" in gu_doc and "14" in gu_doc)
     # HSTS 能开的前提是第 7 项先上线：头锁 180 天且退不回，证书真断了只有那条告警能提前送到。
@@ -5382,8 +5483,9 @@ console.log(JSON.stringify(out));
             "free -b",
             "/learn/",
             "C++ 数据结构与算法图解"))
-        and _seg70.count('ping_fail "') == 8,
-        "少一项 = 这类静默故障重新变回没人看得见；排到扩展段之后 = QQbot 挂了挡住仓库侧检查")
+        and _seg70.count('ping_fail "') == 11,
+        "少一项 = 这类静默故障重新变回没人看得见；排到扩展段之后 = QQbot 挂了挡住仓库侧检查"
+        "（8 = 第 10–13 项原有判定，11 = 加上资源层④慢刀子三项 14–16 各一条）")
     chk("T70 sshd 那条把「为什么只能靠这里看见」写进注释（探活自己不出问题就没人知道 ssh 死了）",
         "ctlui" in _seg70 and "Mac 备份拉取" in _seg70)
     # ── T70 补：失败去重（2026-11-06 astrbot 探测一次瞬时 000 误报 DOWN）──────────
@@ -5566,8 +5668,10 @@ console.log(JSON.stringify(out));
         and "unset HC_PING_URL" in dm70)
     chk("T70 ★ 本体上线前先 sh -n（写坏了每 2 分钟失败一次，而页面只会变红、没人知道为什么）",
         'sh -n ${APP_DIR}/healthcheck.sh' in dm70 and '中止部署' in dm70)
-    chk("T70 ★ 扩展段在位要吭声 + 编号注释 # 10) → # 14) 顺手改掉（只动注释，不碰检查内容）",
-        'sed -i \'s/^# 10) QQbot/# 14) QQbot/\' ${APP_DIR}/healthcheck-extra.sh' in dm70
+    chk("T70 ★ 扩展段在位要吭声 + 编号注释 # 10) → # 17) 顺手改掉（本体 14~16 被慢刀子占用后"
+        "QQbot 顺移到 17；也接受 # 14) QQbot 的中间形态，只动注释不碰检查内容）",
+        'sed -i \'s/^# 10) QQbot/# 17) QQbot/\' ${APP_DIR}/healthcheck-extra.sh' in dm70
+        and 'sed -i \'s/^# 14) QQbot/# 17) QQbot/\' ${APP_DIR}/healthcheck-extra.sh' in dm70
         and 'stat -c \'%a %U:%G\' ${APP_DIR}/healthcheck-extra.sh' in dm70)
     # 负向测试那天（11-02）踩到的第二处谎：ping_fail 按设计 exit 0（已告警不必让 systemd 报
     # failed），而自测既看退出码又 grep -n 20 的历史日志 —— 脚本正在报 FAIL，自测照样打勾。

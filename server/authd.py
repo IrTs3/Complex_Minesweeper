@@ -84,17 +84,20 @@ UA_MAX = 300                            # 使用记录里 UA 原文的截断长�
 # 拒绝原因（写进使用记录，也回给密码页决定文案）
 R_BAD_PW = "bad_password"
 R_THROTTLED = "throttled"
+# 停用/过期只进 usage.jsonl 供管理员追查，**不回给客户端**（2026-11-16 收敛）：
+# 密码状态是存在性信息，前提是先猜中高熵密码串；对外一律按 bad_password 处理，
+# 被停用的访客看到的就是「密码不正确」。
 R_DISABLED = "disabled"
 R_EXPIRED = "expired"
 # 闸门开放（免密）放行——只进 usage.jsonl，不是给密码页看的文案
 R_GATE_OPEN = "gate_open"
 # 原因 → 说给用户的话。**必须与 web/gate/gate.js 的 MSG 逐字一致**（T55 钉住），
 # 否则同一个失败在「有 JS」和「无 JS」两条路上会显示成两句不一样的话。
+# 表里只有对外可见的两条；R_DISABLED/R_EXPIRED 不在此表，经 reason_sentence()
+# 与 deny() 的收敛后同样落到 R_BAD_PW 的话术。
 REASON_ZH = {
     R_BAD_PW: "密码不正确，请重试",
     R_THROTTLED: "尝试过于频繁，请等一会儿再试",
-    R_DISABLED: "这个密码已被停用，请找管理员换一个",
-    R_EXPIRED: "这个密码已过期，请找管理员换一个",
 }
 
 # 无 JavaScript 的原生表单提交走这条：把提示写在**本响应体**里，不做任何跳转。
@@ -1039,17 +1042,20 @@ class Handler(BaseHTTPRequestHandler):
             """按原因分别响应。
 
             节流必须是 429 而非 401：否则用户输对密码却看到「密码不正确」，
-            会以为自己记错了（这个坑踩过一次）。禁用/过期也同样要能与
-            「密码错」区分开，否则用户会一直重试一个永远不会通过的密码。
+            会以为自己记错了（这个坑踩过一次）。
+            对外原因收敛：disabled/expired 是密码状态（存在性信息），只进
+            usage.jsonl，不回给客户端——fetch 分支的 JSON 和无 JS 的内联页
+            都按 bad_password 显示（2026-11-16 审计遗留项收敛）。
             """
+            shown = reason if reason in (R_BAD_PW, R_THROTTLED) else R_BAD_PW
             extra = [("Retry-After", str(min(max(retry, 1), 900)))] if retry else None
             if is_fetch:
-                body = json.dumps({"ok": False, "reason": reason}).encode()
+                body = json.dumps({"ok": False, "reason": shown}).encode()
                 return self._send(429 if retry else 401, body,
                                   ctype="application/json", extra=extra)
             # 无 JS 的原生表单提交：直接把话写在这一响应的正文里。
             return self._send(429 if retry else 401,
-                              nojs_page(reason_sentence(reason, retry)),
+                              nojs_page(reason_sentence(shown, retry)),
                               ctype="text/html; charset=utf-8", extra=extra)
 
         try:

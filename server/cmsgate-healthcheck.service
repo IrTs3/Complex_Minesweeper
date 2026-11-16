@@ -7,13 +7,18 @@ Wants=network-online.target
 Type=oneshot
 ExecStart=/opt/cmsgate/healthcheck.sh
 
-# 只读探活 + 出站 ping + 一个失败计数文件（连续 2 轮才告警的去重状态）→ 可严格沙箱，
-# ReadWritePaths 只为那个文件开口（- 前缀：文件被删也不至于起不来，脚本会退回单次即报并吭声）。
+# 只读探活 + 出站 ping + 两个可写点（- 前缀：路径被删也不至于起不来）：
+#   · healthcheck-fails：连续 2 轮才告警的去重计数；
+#   · baseline/：慢刀子三项（14~16）的 EMA 基线状态，脚本原子写（.tmp + mv），
+#     所以开口的是**目录**而不是单个文件。两个都必须放 root 属主的 /opt/cmsgate 下：
+#     本 unit 剥了全部 capabilities，root 没有 CAP_DAC_OVERRIDE，穿不进 cmsgate
+#     用户 700 的 /var/lib/cmsgate（2026-11-07 gateconfig、11-16 基线目录两次实锤）。
 # 刻意不设 SystemCallFilter / MemoryDenyWriteExecute：那两者容易掐断 curl 的 TLS 握手，
 # 得不偿失；本服务已无其余写权限、无 capabilities，风险面足够小。
 NoNewPrivileges=yes
 ProtectSystem=strict
 ReadWritePaths=-/opt/cmsgate/healthcheck-fails
+ReadWritePaths=-/opt/cmsgate/baseline
 PrivateTmp=yes
 ProtectKernelTunables=yes
 ProtectControlGroups=yes
