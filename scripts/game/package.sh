@@ -57,6 +57,20 @@ rm -f "$RES/assets/.DS_Store"
 rm -f "$RES/assets/1.jpg"   # 与 bg.jpg 完全重复的副本，不必随包分发（项目里仍保留）
 rm -f "$RES/assets/dmg_bg.png" "$RES/assets/dmg_bg@2x.png"   # 仅用于 dmg 外观，不进 app 包
 
+# AGPL-3.0 源码指引（许可证合规）：游戏二进制内含 AGPL-3.0 授权的求解器组件
+# （src/solver/，header-only 编进 minesweeper），分发二进制须「随附源码或书面
+# 说明获取途径」——用「公开仓库 + 本文件」履行；其余代码按 MIT 授权。
+SRC_REV=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
+cat > "$RES/SOURCES.txt" <<EOF
+本应用的二进制（minesweeper）内含按 GNU Affero General Public License v3.0
+（AGPL-3.0）授权的求解器组件（源码路径 src/solver/ 等）；其余代码按 MIT 授权分发。
+
+对应源码仓库：https://github.com/IrTs3/Complex_Minesweeper
+打包时源码提交：$SRC_REV
+AGPL-3.0 全文见该仓库 src/solver/LICENSE；MIT 全文见该仓库 LICENSE。
+第三方动态库（SFML/FreeType/libpng）与字体各随其原许可。
+EOF
+
 echo "==> 3/8 拷入动态库"
 for lib in $HOMEBREW_LIBS; do
   name="$(basename "$lib")"

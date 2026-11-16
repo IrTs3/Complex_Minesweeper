@@ -205,6 +205,19 @@ NOTE
 
 if [ -f "$ROOT/docs/使用说明.txt" ]; then cp "$ROOT/docs/使用说明.txt" "$DIST/使用说明.txt"; fi
 
+# AGPL-3.0 源码指引（许可证合规）：exe 内含 AGPL-3.0 授权的求解器组件
+# （src/solver/ 编进 minesweeper.exe），分发二进制须「随附源码或书面说明获取途径」。
+SRC_REV=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)
+cat > "$DIST/SOURCES.txt" <<EOF
+本应用的二进制（minesweeper.exe）内含按 GNU Affero General Public License v3.0
+（AGPL-3.0）授权的求解器组件（源码路径 src/solver/ 等）；其余代码按 MIT 授权分发。
+
+对应源码仓库：https://github.com/IrTs3/Complex_Minesweeper
+打包时源码提交：$SRC_REV
+AGPL-3.0 全文见该仓库 src/solver/LICENSE；MIT 全文见该仓库 LICENSE。
+第三方动态库（SFML/FreeType/libpng）与字体各随其原许可。
+EOF
+
 chmod 644 "$DIST"/*.txt 2>/dev/null || true
 ZIP="$ROOT/dist/ComplexMinesweeper-win64.zip"
 rm -f "$ZIP"
