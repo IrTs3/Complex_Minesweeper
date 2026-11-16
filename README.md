@@ -351,9 +351,9 @@ text
 **本仓库许可证（双证）：**
 
 - **仓库整体：[MIT](../LICENSE)**——游戏、闸门、管理工具、学习站、部署脚本等，自由使用 / 修改 / 分发，保留版权声明即可
-- **例外（GPL-3.0）：求解器及其工具链**——`src/solver/`、`tools/solver.cpp`、`tools/nn/`、`assets/nn/`、`web/src/solver_api.cpp`、`web/ts/solverworker.ts`、`docs/求解器第四代报告.md`。分发这些内容的衍生品须同样以 GPL-3.0 开源（全文见 [`src/solver/LICENSE`](../src/solver/LICENSE)）
+- **例外（AGPL-3.0）：求解器及其工具链**——`src/solver/`、`tools/solver.cpp`、`tools/nn/`、`assets/nn/`、`web/src/solver_api.cpp`、`web/ts/solverworker.ts`、`docs/求解器第四代报告.md`。分发这些内容的衍生品须同样以 AGPL-3.0 开源；**通过网络提供服务（SaaS）同样必须向用户提供源码**——AGPL = GPL + 「网络交互也要开源」，堵住「把求解器包成付费 API 却不公开」的绕行道（全文见 [`src/solver/LICENSE`](../src/solver/LICENSE)）
 - third_party/ 与随包字体各随其源许可，见下
-- 说明：根 [LICENSE](../LICENSE) 是未修改的 MIT 原文；上列 GPL-3.0 例外以 [`src/solver/LICENSE`](../src/solver/LICENSE) 全文为准，约束范围以本节清单为准
+- 说明：根 [LICENSE](../LICENSE) 是未修改的 MIT 原文；上列 AGPL-3.0 例外以 [`src/solver/LICENSE`](../src/solver/LICENSE) 全文为准，约束范围以本节清单为准
 
 **第三方依赖与版权：**
 
@@ -574,4 +574,4 @@ bash scripts/dist/deploy-dist.sh                                               #
 - `docs/项目结构.txt` —— 2026-10-13 的历史快照（**已被 `docs/项目结构说明.md` 取代**，仅作对照）
 - `docs/CLION-交叉编译配置.md` —— CLion 的 Windows 交叉编译工具链与 CMake Profile 设置
 
-- 许可证：见 [LICENSE](../LICENSE)（MIT 为主，求解器及其工具链 GPL-3.0，详见上文第十一章）
+- 许可证：见 [LICENSE](../LICENSE)（MIT 为主，求解器及其工具链 AGPL-3.0，详见上文第十一章）
