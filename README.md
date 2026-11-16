@@ -353,6 +353,7 @@ text
 - **仓库整体：[MIT](../LICENSE)**——游戏、闸门、管理工具、学习站、部署脚本等，自由使用 / 修改 / 分发，保留版权声明即可
 - **例外（GPL-3.0）：求解器及其工具链**——`src/solver/`、`tools/solver.cpp`、`tools/nn/`、`assets/nn/`、`web/src/solver_api.cpp`、`web/ts/solverworker.ts`、`docs/求解器第四代报告.md`。分发这些内容的衍生品须同样以 GPL-3.0 开源（全文见 [`src/solver/LICENSE`](../src/solver/LICENSE)）
 - third_party/ 与随包字体各随其源许可，见下
+- 说明：根 [LICENSE](../LICENSE) 是未修改的 MIT 原文；上列 GPL-3.0 例外以 [`src/solver/LICENSE`](../src/solver/LICENSE) 全文为准，约束范围以本节清单为准
 
 **第三方依赖与版权：**
 
