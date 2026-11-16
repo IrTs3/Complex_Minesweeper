@@ -1,3 +1,4 @@
+ // SPDX-License-Identifier: AGPL-3.0-only
 // NNForward.h — 学生网络（.cnnw）加载与前向，header-only，纯标准库。
 //
 // 三端契约的唯一 C++ 实现：格式与运算顺序的权威出处是 tools/nn/dump_format.md，

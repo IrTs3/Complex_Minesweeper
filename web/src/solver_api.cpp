@@ -1,3 +1,4 @@
+ // SPDX-License-Identifier: AGPL-3.0-only
 // 网页端精确概率桥：把玩家视角的盘面喂给 SolverEngine 跑一次 analyzeForHint。
 // 与桌面端 T 键后台线程同一份精确管线（同一 .h），保证两端概率逐位同口径。
 //

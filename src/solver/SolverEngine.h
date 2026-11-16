@@ -1,3 +1,4 @@
+ // SPDX-License-Identifier: AGPL-3.0-only
 // SolverEngine.h — 复数扫雷「自由推理求解器」引擎（header-only，namespace msolve）。
 //
 // 从 solver.cpp（复盘统计 CLI）抽出，游戏内「机器演示」与 CLI 统计共用同一引擎——

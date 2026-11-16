@@ -1,3 +1,4 @@
+ // SPDX-License-Identifier: AGPL-3.0-only
 // solver.cpp — 复数扫雷「自由推理求解器」与免猜率统计（复盘分析工具，不进对局）。
 //
 // 引擎（约束推理/分量枚举/见证覆盖/全局DP，含诚实契约）在 src/solver/SolverEngine.h，

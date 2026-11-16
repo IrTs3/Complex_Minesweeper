@@ -148,4 +148,9 @@ The desktop and web front-ends are **two independent implementations** sharing t
 
 ## License
 
-Not yet chosen — will be added before the first stable release. Until then, all rights reserved by the author.
+Dual-licensed:
+
+- **MIT** — the repository as a whole (game, gate, admin tools, learning site, deployment scripts). See [LICENSE](LICENSE).
+- **AGPL-3.0** — the minesweeper solver and its toolchain (`src/solver/`, `tools/solver.cpp`, `tools/nn/`, `assets/nn/`, `web/src/solver_api.cpp`, `web/ts/solverworker.ts`). Full text in [`src/solver/LICENSE`](src/solver/LICENSE). AGPL adds a network-interaction clause on top of GPL: hosting the solver as a service (e.g. a paid API) also requires offering its source to your users.
+
+Third-party dependencies under `third_party/` and the bundled font keep their own licenses (zlib / FreeType License / libpng / SIL OFL 1.1). The background artwork and the app icon are **not** part of this repository; they are used under a separate non-commercial permission from their artist.

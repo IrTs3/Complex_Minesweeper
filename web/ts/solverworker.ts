@@ -1,3 +1,4 @@
+ // SPDX-License-Identifier: AGPL-3.0-only
 // 精确概率求解 Worker：WASM solver 跑在独立线程，长盘求解（可达数十秒）不卡渲染与输入。
 // classic worker（无 ES import/export，tsc 对无导入文件产出全局脚本）：里面 importScripts
 // emscripten 的 MODULARIZE 胶水。协议见 game.ts 的 ProbResultMsg / probRequest。

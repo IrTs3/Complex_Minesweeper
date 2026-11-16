@@ -9,6 +9,7 @@
 #   cmsdist-client-macOS.dmg        mac 单文件客户端（solver 内嵌，终端跑）
 #   cmsdist-client-win64.zip        Windows 免安装包（embeddable Python + bat）
 #   cmsdist-client-linux64.tar.gz   Linux(Ubuntu) 免安装包（需系统 python3）
+#   SOURCES.txt                     AGPL-3.0 源码指引（随 dmg/zip/tar.gz 各一份 + 散装一份）
 #   ed25519-private.key             签名私钥——在 ~/.cmsdist/（不在本目录，整个
 #                                   dist-solver/ 目录可以直接外发）；丢了就只能
 #                                   换钥匙重发包
@@ -55,6 +56,20 @@ trap 'rm -rf "$BUILD"' EXIT
 SOLVER_VER=$({ shasum -a 256 "$HERE/tools/solver.cpp" "$HERE/src/core/Board.cpp" \
         "$HERE/src/core/Board.h" "$HERE"/src/solver/*.h | awk '{print $1}'; } \
     | tr -d '\n' | shasum -a 256 | cut -c1-8)
+
+# AGPL-3.0 源码指引（许可证合规）：包里的 solver-expert* 二进制按 AGPL-3.0 分发，
+# 须「随附源码或书面说明获取途径」——用「公开仓库 + 本文件」履行该义务。
+SRC_REV=$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo unknown)
+mkdir -p "$OUT"
+cat > "$OUT/SOURCES.txt" <<EOF
+本分发包内的 solver-expert（macOS 包内嵌 / solver-expert.exe / solver-expert-linux）
+按 GNU Affero General Public License v3.0（AGPL-3.0）授权分发，不附带任何担保。
+
+对应源码（SolverEngine.h、NNForward.h、tools/solver.cpp 及其依赖）：
+  https://github.com/IrTs3/Complex_Minesweeper
+打包时源码提交：$SRC_REV    solver 指纹：$SOLVER_VER
+许可证全文见该仓库 src/solver/LICENSE。
+EOF
 
 echo "==> 1/6 签名密钥（首次生成，之后复用）"
 # 私钥放 ~/.cmsdist/ 而不是工程 dist-solver/——后者是要整个发人的成品目录，
@@ -165,6 +180,7 @@ cp "$BUILD/dist/dist-client" "$BUILD/dmg/"
 rm -f "$OUT/dist-client"
 cp "$BUILD/dist/dist-client" "$OUT/dist-client"   # 散装副本同步更新（本机直接跑用）
 cp "$OUT/使用说明.txt" "$BUILD/dmg/"
+cp "$OUT/SOURCES.txt" "$BUILD/dmg/"
 rm -f "$OUT/cmsdist-client-macOS.dmg"
 hdiutil create -volname "cmsdist 客户端" -srcfolder "$BUILD/dmg" -ov -format UDZO \
     "$OUT/cmsdist-client-macOS.dmg" > /dev/null
@@ -202,7 +218,7 @@ cp "$PYEMBED_ZIP" "$BUILD/pyembed.zip"
 unzip -q "$BUILD/pyembed.zip" -d "$BUILD/win/cmsdist-client"
 cp "$HERE/tools/dist_client.py" "$HERE/tools/ed25519.py" "$BUILD/win/cmsdist-client/"
 cp "$BUILD/solver-expert.exe" "$BUILD/ed25519-pub.hex" "$BUILD/win/cmsdist-client/"
-cp "$OUT/使用说明.txt" "$BUILD/win/cmsdist-client/"
+cp "$OUT/使用说明.txt" "$OUT/SOURCES.txt" "$BUILD/win/cmsdist-client/"
 # bat 里要输出中文提示，而中文 Windows 的 cmd 默认是 GBK 编码——
 # UTF-8 存盘的 bat 中文必乱码，所以这里写 UTF-8 再 iconv 转成 GBK 落盘。
 # 注意布局：embeddable Python 解压成平级（python.exe 就在 cmsdist-client
@@ -272,7 +288,7 @@ if [ "$LINUX_OK" = 1 ]; then
     cp "$LINUX_SOLVER" "$BUILD/solver-expert-linux"
     mkdir -p "$BUILD/linux/cmsdist-client"
     cp "$HERE/tools/dist_client.py" "$HERE/tools/ed25519.py" \
-       "$BUILD/ed25519-pub.hex" "$OUT/使用说明.txt" "$BUILD/linux/cmsdist-client/"
+       "$BUILD/ed25519-pub.hex" "$OUT/使用说明.txt" "$OUT/SOURCES.txt" "$BUILD/linux/cmsdist-client/"
     cp "$LINUX_SOLVER" "$BUILD/linux/cmsdist-client/solver-expert"
     cat > "$BUILD/linux/cmsdist-client/启动跑分.sh" <<'EOS'
 #!/bin/bash
