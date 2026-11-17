@@ -260,15 +260,83 @@ def _default_state():
 
 def load_state():
     with open(STATE_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+        st = json.load(f)
+    _merge_done_archive(st)
+    return st
+
+
+# —— done 区两层化（2026-11-17）：21,995 条 × ~430B ≈ 9.4MB 全躺在 state.json 里，
+#    每次落盘都整份序列化 + fsync，成本随历史线性涨。archive 化后磁盘文档恒定
+#    （只留 DONE_KEEP_RECENT 条最新），更老的逐行追加进 done-archive.jsonl；
+#    内存里仍是全量 dict（聚合/复查/ctlui 历史/导出口径全部不变），加载时合并回来。
+DONE_ARCHIVE = os.path.join(STATE_DIR, "done-archive.jsonl")
+DONE_KEEP_RECENT = 500
+#: 本进程已写进 archive 的 task_id。load 时从 archive 文件重建，save 时据此把
+#: 老条目从 state.json 的 done 里排除。archive 同行可重复（崩溃窗口），合并幂等。
+_archived_ids = set()
+
+
+def _merge_done_archive(st):
+    global _archived_ids
+    if not os.path.exists(DONE_ARCHIVE):
+        return
+    done = st.setdefault("done", {})
+    with open(DONE_ARCHIVE, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue        # 断行/半行：与 state.json 的原子替换同一哲学，坏行跳过
+            tid, rec = row.get("tid"), row.get("rec")
+            if not tid or not isinstance(rec, dict):
+                continue
+            _archived_ids.add(tid)
+            done.setdefault(tid, rec)   # state.json 里的（更新）优先
+
+
+def _split_done(done):
+    """按 time 取最老的溢出条目追加进 archive。只追加不重写；崩溃最多多写一行，
+    合并时 setdefault 兜底。归档成功才记 _archived_ids，失败下次重试（幂等）。"""
+    overflow = sorted(done.items(), key=lambda kv: kv[1].get("time", 0))[: len(done) - DONE_KEEP_RECENT]
+    fresh = [(tid, rec) for tid, rec in overflow if tid not in _archived_ids]
+    if not fresh:
+        return
+    with open(DONE_ARCHIVE, "a", encoding="utf-8") as f:
+        for tid, rec in fresh:
+            f.write(json.dumps({"tid": tid, "rec": rec}, ensure_ascii=False,
+                               separators=(",", ":")) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+    # state.json 0600 同款纪律：archive 里同样有 IP 与机器名，走 umask 会得到 0644；
+    # root 跑 admin 写命令时还得把属主还给 cmsgate——root 属主会让服务下次 append
+    # 直接 EACCES（真发生过：root 属主 state.json → 全服务楔死）。
+    os.chmod(DONE_ARCHIVE, 0o600)
+    if os.geteuid() == 0:
+        try:
+            d = os.stat(STATE_DIR)
+            os.chown(DONE_ARCHIVE, d.st_uid, d.st_gid)
+        except OSError:
+            pass
+    _archived_ids.update(tid for tid, _ in fresh)
 
 
 def save_state(st):
+    done = st.get("done") or {}
+    if len(done) > DONE_KEEP_RECENT:
+        _split_done(done)
+    # st 本身不动：调用方在落盘后还要继续用全量 done（聚合/导出都遍历它）。
+    # 磁盘文档只装没归档的部分，文档体积从此不随历史增长。
+    doc = dict(st)
+    if _archived_ids:
+        doc["done"] = {tid: rec for tid, rec in done.items() if tid not in _archived_ids}
     # ★ 临时名必须每次唯一：共用一个 state.json.tmp 时，两个并发的写者会往同一个
     #   文件里各写一份完整文档，短的那份覆盖前缀、长的那位留个尾巴 → 扶正即坏档。
     fd, tmp = tempfile.mkstemp(dir=STATE_DIR, prefix=".state-", suffix=".tmp")
     with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(st, f, ensure_ascii=False, separators=(",", ":"))
+        json.dump(doc, f, ensure_ascii=False, separators=(",", ":"))
         f.flush()
         os.fsync(f.fileno())
         # 权限要在 replace 之前落在临时文件上：state.json 里有每个客户端的 IP 与
@@ -737,7 +805,14 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "cmsdist/1"
 
-    def log_message(self, fmt, *args):  # journald 默认收 stdout；错误访问也留痕但不打 payload
+    def log_message(self, fmt, *args):
+        # 2026-11-17：2xx 访问不再逐条留痕。机队每秒 2.7 条 POST /progress 全进
+        # journald（约 1 万行/小时，实占约为文本 35 倍，曾灌到 1.1G）。
+        # 任务结果本就永久落在 state.json 的 done 区与 results/*.json.gz，
+        # 成功访问的逐条日志纯属重复存储；真异常走下面的 log_error，仍进 journal。
+        pass
+
+    def log_error(self, fmt, *args):
         sys.stderr.write("%s - %s\n" % (self.client_address[0], fmt % args))
 
     def do_GET(self):
@@ -805,11 +880,24 @@ class Handler(BaseHTTPRequestHandler):
         return _json(self, 404, {"error": "not found"})
 
 
+class QuietHTTPServer(ThreadingHTTPServer):
+    """连接层异常静默（2026-11-17）：客户端超时断开时，socketserver 的默认
+    handle_error 会把整条堆栈写进 stderr → journald。服务器变慢的那阵（CPU 被挤）
+    每个超时客户端一条 ~1KB，实测 14MB/h 的纯噪音，还会被 rsyslog 二次放大进
+    syslog。只静默连接类异常——真 bug 的堆栈照旧留痕。"""
+
+    def handle_error(self, request, client_address):
+        etype = sys.exc_info()[0]
+        if etype in (BrokenPipeError, ConnectionResetError, TimeoutError):
+            return
+        super().handle_error(request, client_address)
+
+
 def cmd_serve(argv):
     host = argv[0] if argv else "0.0.0.0"
     port = int(argv[1]) if len(argv) > 1 else 7120
     ensure_dirs()
-    srv = ThreadingHTTPServer((host, port), Handler)
+    srv = QuietHTTPServer((host, port), Handler)
     sys.stderr.write(f"cmsdist serving on {host}:{port} (state={STATE_DIR})\n")
     srv.serve_forever()
 

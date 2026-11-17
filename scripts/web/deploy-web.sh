@@ -33,6 +33,7 @@
 #
 # nginx 侧会写入三个文件（每次都整体覆盖，改这里即改线上）：
 #   /etc/nginx/snippets/cms-security-headers.conf   安全头（server 与 location 都要 include）
+#   /etc/nginx/snippets/cms-ratelimit-loc.conf      return 型 location 的显式限速（见其头部说明）
 #   /etc/nginx/conf.d/cms-ratelimit.conf            限流区定义（只能写在 http 上下文）
 #   /etc/nginx/sites-available/complexminesweeper   站点本体：两个 server 块（80 跳转 / 443+回环内容）
 #
@@ -261,6 +262,22 @@ add_header Content-Security-Policy "default-src 'self'; img-src 'self' data: blo
 add_header Strict-Transport-Security $cms_hsts always;
 HEADERS
 
+$SSH "$SERVER" "cat > /etc/nginx/snippets/cms-ratelimit-loc.conf" <<'RATELIMIT'
+# return 型 location 的显式限速——**为什么 server 级有了还要重复**：
+# nginx 的 return 在 rewrite 阶段就终止请求，早于 limit_req/limit_conn 所在的
+# preaccess 阶段，所以凡是靠 return 短路的 location（404 兜底、302 跳转）都
+# 完全不受 server 级限速保护。2026-11-17 实弹自打实锤：乱路径 404 洪水 44 r/s
+# 连打零 429（h1/h2、本机/外网全形态），按 4Mbps 攻击带宽可推到 ~3.4GB/h 的
+# access.log 增量——「B 方案 200MB/天」的预算就是建立在这个漏洞上的。
+# 参数与 server 级一致；nginx 规则是「location 有自己的 limit_req 就不再继承
+# server 级」，所以这里照抄一份是刻意的显式化，不是冗余。
+# 另：location = /__nf 是 internal 型，外部请求在 find_config 阶段就被拒、
+# 进不到任何阶段指令——它天生不受限速也无法加（固定路径、响应极小，接受）。
+limit_req  zone=cms_perip burst=40 nodelay;
+limit_req_status 429;
+limit_conn cms_conn 20;
+limit_conn_status 429;
+RATELIMIT
 $SSH "$SERVER" "cat > /etc/nginx/conf.d/cms-ratelimit.conf" <<'RATELIMIT'
 # 复数扫雷：限流区定义。必须在 http 上下文（conf.d/*.conf 会被 nginx.conf 自动 include）
 # 10m 共享内存约可存 16 万个 IP 的状态，对个人项目绰绰有余
@@ -342,11 +359,15 @@ server {
         error_log /dev/null crit;
         add_header Cache-Control "no-store" always;
         include /etc/nginx/snippets/cms-security-headers.conf;
-        return 404;
+        # 404 必须在内容阶段产生（try_files 找不到文件 =404）：return 在 rewrite 阶段
+        # 就终止请求，连本 location 里的 limit_req（preaccess 阶段）都执行不到 ——
+        # 2026-11-17 实弹自打两连败实锤（server 级 include 各救不了）。
+        include /etc/nginx/snippets/cms-ratelimit-loc.conf;
+        try_files /nonexistent =404;
     }
 
     # 其余一律 302 到 https。三个细节都是刻意的：
-    #   · **必须写在「location /」里，不能放在 server 级**：server 级的 return 属于
+    #   · **必须由「location /」兜底触发，不能放在 server 级**：server 级的 return 属于
     #     rewrite 的 server 阶段，先于 location 匹配执行，会把上面 ACME 的 ^~ 与
     #     /gate/ 的 404 一起短路（2026-10-20 实跑：/gate/<TOKEN>/ 在明文上被 302 出去，
     #     ACME 挑战同样被跳走 —— 证书续期会静默失败）。
@@ -354,7 +375,16 @@ server {
     #     等于让来的人决定把你跳去哪（可被用来做钓鱼跳转）。
     #   · 302 而不是 1：永久跳转会被浏览器缓存下来，证书一旦出问题就退不回 http 了
     #     （本项目片段 301→302 已经踩过一次同样的坑）。
+    # 302 本体也不能直接 return（同 /gate/ 的阶段问题，限速拦不住）：先 try_files
+    # 制造 404 —— 此时本 location 的 limit_req 已在 preaccess 拦过一轮 —— 再由
+    # error_page 把 404 引进命名 location 完成跳转。对这些路径来说 404 只可能出自
+    # try_files 自己，不会误伤其他语义。
     location / {
+        include /etc/nginx/snippets/cms-ratelimit-loc.conf;
+        error_page 404 = @tohttps;
+        try_files /nonexistent =404;
+    }
+    location @tohttps {
         return 302 https://@@DOMAIN@@$request_uri;
     }
 }
@@ -650,8 +680,13 @@ echo "==> 默认页片段（按当前模板重渲染，保留运维选定的模�
 $SSH "$SERVER" "cat > /root/cms-landing-game.conf" <<'LANDING'
 # landing-mode: game
 # 开放站：根路径与任何未定义路径都 302 到 /game；游戏是否可见由 /game 的闸门决定
+# 302 一律由 error_page 引到命名 location 完成：直接 return 在 rewrite 阶段终止
+# 请求，本 location 的 limit_req（preaccess 阶段）执行不到，等于不限速
+# （2026-11-17 实弹自打实锤）。try_files 制造 404 前，限速已经拦过一轮。
 location = / {
-    return 302 /game;
+    include /etc/nginx/snippets/cms-ratelimit-loc.conf;
+    error_page 404 = @cms_landing_to_game;
+    try_files /nonexistent =404;
 }
 
 # 游戏入口：必须登录；未登录由 error_page 映射成 404「当作不存在」
@@ -665,21 +700,33 @@ location = /game {
 
 # 带斜杠的写法纠正到 /game。302 不用 301：换路由方案时别让浏览器被永久缓存钉住
 location = /game/ {
-    return 302 /game;
+    include /etc/nginx/snippets/cms-ratelimit-loc.conf;
+    error_page 404 = @cms_landing_to_game;
+    try_files /nonexistent =404;
 }
 
 # 兜底：其他任何路径都去游戏（开放站希望访客直接落到游戏，而不是看见 404）
 location / {
     add_header Cache-Control "no-store" always;
     include /etc/nginx/snippets/cms-security-headers.conf;
+    include /etc/nginx/snippets/cms-ratelimit-loc.conf;
+    error_page 404 = @cms_landing_to_game;
+    try_files /nonexistent =404;
+}
+
+location @cms_landing_to_game {
     return 302 /game;
 }
 LANDING
 $SSH "$SERVER" "cat > /root/cms-landing-learn.conf" <<'LANDING_LEARN'
 # landing-mode: learn
 # 学习站：根路径 302 到公开学习站 /learn/；游戏只在 /game，其余路径一律 404
+# 302 由 error_page 引到命名 location 完成（直接 return 在 rewrite 阶段终止请求，
+# 限速执行不到 —— 2026-11-17 实弹自打实锤）；兜底 404 用 try_files 在内容阶段产生。
 location = / {
-    return 302 /learn/;
+    include /etc/nginx/snippets/cms-ratelimit-loc.conf;
+    error_page 404 = @cms_landing_to_learn;
+    try_files /nonexistent =404;
 }
 
 # 游戏入口：必须登录；未登录由 error_page 映射成 404「当作不存在」
@@ -693,14 +740,24 @@ location = /game {
 
 # 带斜杠的写法纠正到 /game。302 不用 301：换路由方案时别让浏览器被永久缓存钉住
 location = /game/ {
-    return 302 /game;
+    include /etc/nginx/snippets/cms-ratelimit-loc.conf;
+    error_page 404 = @cms_landing_to_game;
+    try_files /nonexistent =404;
 }
 
 # 兜底：学习站模式下，除 /learn/ 与 /game 之外的任何路径一律 404（不承认受保护内容）
 location / {
     add_header Cache-Control "no-store" always;
     include /etc/nginx/snippets/cms-security-headers.conf;
-    return 404;
+    include /etc/nginx/snippets/cms-ratelimit-loc.conf;
+    try_files /nonexistent =404;
+}
+
+location @cms_landing_to_learn {
+    return 302 /learn/;
+}
+location @cms_landing_to_game {
+    return 302 /game;
 }
 LANDING_LEARN
 $SSH "$SERVER" "set -e
@@ -1360,6 +1417,21 @@ $SSH "$SERVER" "
         exit 1
     fi
     echo \"    ✓ 出现 \${n429} 次 429（另有 \${n404} 次 404），限流生效\"
+
+    echo '  乱路径兜底限流检查（连打随机路径 80 次，应出现 429）:'
+    # 与上面互补的另一半：/style.css 走静态 location（内容阶段），limit_req 正常；
+    # 但兜底 location / 的 **return 404/302 在 rewrite 阶段短路，早于 preaccess**，
+    # server 级限速对它完全不生效（2026-11-17 实弹测试实锤的假绿灯）——所以 return 型
+    # location 都显式 include 了 cms-ratelimit-loc.conf，这里验证的就是那一刀真的补上了。
+    # 这条如果红了：部署产物里兜底 location 丢了限速 include，乱路径洪水不受限。
+    codes2=\$(for i in \$(seq 1 80); do curl -s -o /dev/null -w '%{http_code} ' http://localhost:${PORT}/nf-selftest-\$i; done)
+    echo \"    分布：\$codes2\"
+    n429b=\$(printf '%s' \"\$codes2\" | tr ' ' '\\n' | grep -c '^429\$' || true)
+    if [ \"\$n429b\" -eq 0 ]; then
+        echo '    ✗ 连打 80 次随机路径未出现 429 —— 兜底 location 的 return 绕过了限速（实弹测试抓过的坑）' >&2
+        exit 1
+    fi
+    echo \"    ✓ 乱路径出现 \${n429b} 次 429，兜底限流生效\"
 
     # —— token 泄漏总闸：到这里所有探针（8080 上的入口请求、80 的那一击、443 分支）都跑完了 ——
     n_log_after=\$(count_tok_hits)

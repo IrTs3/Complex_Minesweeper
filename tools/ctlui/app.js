@@ -1533,9 +1533,11 @@ function successMsg(op, args, data) {
   }
 }
 
-function runGuarded(op, args, desc) {
-  if (rememberedPw) return runOp(op, args, rememberedPw, desc);
-  pendingOp = { op, args, desc };
+function runGuarded(op, args, desc, batch = false) {
+  if (rememberedPw) {
+    return batch ? runOpBatch(op, args, rememberedPw, desc) : runOp(op, args, rememberedPw, desc);
+  }
+  pendingOp = { op, args, desc, batch };
   $("dlg-desc").textContent = desc;
   $("dlg-err").hidden = true;
   $("dlg-pw").value = "";
@@ -1589,7 +1591,9 @@ $("btn-insert").onclick = () => {
     n = $("ins-n").value.trim();
     if (!/^\d+$/.test(n) || +n < 1) return toast("数量必须是正整数", "bad");
   }
-  if (+n > 500) return toast("一次最多插队 500 个", "bad");
+  // 不设数量上限；>500 是大批量，二次确认兜底（机队规模大时是正常用法）
+  if (+n > 500 &&
+      !confirm(`这次要插队 ${n} 个任务——超过 500 的大批量，确定继续吗？`)) return;
   const b = readBoard("ins", "插队规格"); if (!b) return;
   const g = intArg($("ins-games"), "局数"); if (g === null) return;
   const args = [n, $("ins-model").value, `${b.cols}x${b.rows}x${b.mines}`, ...g,
@@ -1849,8 +1853,43 @@ $("btn-qdel").onclick = () => {
   const ids = [...qdelSel];
   if (!ids.length) return;
   if (!confirm(`从队列删除选中的 ${ids.length} 个任务？（不可恢复，种子不会自动补）`)) return;
-  runGuarded("rm", ids, `删除选中的 ${ids.length} 个队列任务`);
+  if (ids.length > 500 &&
+      !confirm(`要删除的任务超过 500 个（共 ${ids.length} 个）——大批量删除不可恢复，确定执行吗？`)) return;
+  runGuarded("rm", ids, `删除选中的 ${ids.length} 个队列任务`, true);
 };
+/* 大批量操作（rm）：ctl_ui 与服务器端都有单次 64 参数上限，按 ≤64 分批顺序执行。
+   分批是内部实现，界面不感知；中途失败时已完成批次不回滚，明确说给人听。 */
+async function runOpBatch(op, args, admin, desc) {
+  const BATCH = 64;
+  const btns = document.querySelectorAll("button");
+  btns.forEach((b) => (b.disabled = true));
+  try {
+    let removed = 0, notIn = 0;
+    for (let i = 0; i < args.length; i += BATCH) {
+      const d = await api("/api/op", { op, args: args.slice(i, i + BATCH), admin }) || {};
+      removed += (d.removed || []).length;
+      notIn += (d.not_in_queue || []).length;
+    }
+    toast(`✓ 已删除 ${removed} 个队列任务` + (notIn ? `，${notIn} 个不在队列` : ""), "ok");
+    $("dlg").close();
+    histData = null;
+    await refresh(true);
+  } catch (e) {
+    $("dlg-err").textContent = "✗ " + e.message;
+    $("dlg-err").hidden = false;
+    if (e.message.includes("口令")) {
+      rememberedPw = null;
+      if (!pendingOp) pendingOp = { op, args, desc, batch: true };
+      $("dlg-pw").focus();
+    } else {
+      toast(`✗ ${e.message}（中途失败：已删完的批次不回滚，重试即可继续）`, "bad");
+      $("dlg").close();
+    }
+  } finally {
+    btns.forEach((b) => (b.disabled = false));
+  }
+}
+
 $("btn-invalidate").onclick = () => {
   const key = $("inv-key").value.trim();
   if (!key) return toast("先填要作废的任务ID / ip:地址 / name:名字", "bad");
@@ -1864,9 +1903,9 @@ function trySubmit() {
   const pw = $("dlg-pw").value;
   if (!pw) { $("dlg-err").textContent = "✗ 口令不能为空"; $("dlg-err").hidden = false; return; }
   if ($("dlg-remember").checked) rememberedPw = pw;   // 只进内存，刷新页面即消失
-  const { op, args, desc } = pendingOp;
+  const { op, args, desc, batch } = pendingOp;
   pendingOp = null;
-  runOp(op, args, pw, desc);
+  batch ? runOpBatch(op, args, pw, desc) : runOp(op, args, pw, desc);
 }
 $("dlg-form").addEventListener("submit", (e) => { e.preventDefault(); trySubmit(); });
 $("dlg-cancel").onclick = () => $("dlg").close();

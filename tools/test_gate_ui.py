@@ -3839,14 +3839,17 @@ def run_tests(srv: Server, port: int, tok: str, state_dir: Path) -> None:
         and "systemctl reload nginx" in _gpw and "cp -a" in _gpw)
     # 当年那个「人人都摸得到的公开 /gate/ 块」是带 alias 发密码页 HTML 的；
     # 2026-10-20 明文收口后，80 的跳转块里也出现了一个 `location ^~ /gate/`，
-    # 但它只 return 404（不给 token 留痕）。所以判据从「不许有这个块」改成
+    # 但它只出 404（不给 token 留痕）。所以判据从「不许有这个块」改成
     # 「这个块里不许有 alias/root 之类真正发内容的东西」。
+    # 2026-11-17：404 改在内容阶段产生（try_files =404）—— 直接 return 在
+    # rewrite 阶段终止请求，连本 location 的 limit_req 都执行不到，实弹两连败实锤。
     _bare = (dw_src.split("location ^~ /gate/ {", 1)[1].split("}", 1)[0]
              if "location ^~ /gate/ {" in dw_src else "")
     chk("T54 ★ nginx：主配置改成 include gate-path 片段，且硬编码的公开 /gate/ 块已删"
         "（明文收口后 80 上残留的同名块只能是 404，不许 alias 出内容）",
         "include /etc/nginx/snippets/cms-gate-path.conf;" in dw_src
-        and "return 404;" in _bare and "alias" not in _bare and "root" not in _bare)
+        and "try_files /nonexistent =404;" in _bare
+        and "alias" not in _bare and "root" not in _bare)
     # ★2（2026-10-21 复审）：M1 只把片段里那两条 location 的日志关了，明文 80 上这条
     # 404 块漏在外面。而它才是天天被踩的那条 —— 首访没有 HSTS、IM 链接预览爬虫、
     # 手打少一个 s，每一次「按 http:// 点登录链接」都把全文 token 写进 access.log。
@@ -4585,10 +4588,15 @@ def run_tests(srv: Server, port: int, tok: str, state_dir: Path) -> None:
     # server 阶段、先于 location 匹配 —— /gate/ 的 404 与 ACME 的 ^~ 全被短路
     # （实测：明文上 /gate/<TOKEN>/ 拿到 302，Location 里明文带着 token）。
     # 所以必须钉「302 在 location / 里面」这个形状，光有这两行字面量不够。
-    _r302_blk = "location / {\n        return 302 https://@@DOMAIN@@$request_uri;\n    }"
+    # 2026-11-17 两连败后的定稿：return 在 rewrite 阶段终止请求，连本 location 的
+    # limit_req（preaccess）都执行不到 —— 加 include 救不了（第一次部署实锤）。
+    # 所以 302 改为「try_files 在内容阶段制造 404（限速已拦过）→ error_page 引进
+    # 命名 location @tohttps 完成 return」。钉的是这条链路，不是裸 return 行。
+    _r302_blk = "location / {\n        include /etc/nginx/snippets/cms-ratelimit-loc.conf;\n        error_page 404 = @tohttps;\n        try_files /nonexistent =404;\n    }\n    location @tohttps {\n        return 302 https://@@DOMAIN@@$request_uri;\n    }"
     chk("T61 ★ 跳转只许是 302 + 写死 @@DOMAIN@@，且必须写在 location / 里"
         "（301 会被浏览器长期缓存、证书出事退不回；拿 $host 拼等于让来访者决定跳去哪；"
-        "写到 server 级会先于 location 匹配执行，短路 /gate/ 的 404 与 ACME 续期）",
+        "写到 server 级会先于 location 匹配执行，短路 /gate/ 的 404 与 ACME 续期；"
+        "且 302 本体在命名 location 里完成 —— 直接 return 连本 location 限速都绕过）",
         _r302 >= 0 and "@@DOMAIN@@" in _main[_r302:] and "$host" not in _main[_r302:_r302 + 60]
         and "return 301 https" not in _main
         and _r302_blk in _main
@@ -4597,7 +4605,7 @@ def run_tests(srv: Server, port: int, tok: str, state_dir: Path) -> None:
     _h80 = [ln for ln in dw_src.splitlines() if 'http://127.0.0.1/gate/\\$TOK/' in ln]
     chk("T61 ★ 明文 80 上秘密入口 404 且自测把「响应头里出现 token」判成失败"
         "（302 会把唯一的登录凭据原样写进明文 Location）",
-        "return 404;" in _bare and len(_h80) >= 1
+        "try_files /nonexistent =404;" in _bare and len(_h80) >= 1
         and "grep -q \\\"\\$TOK\\\"" in dw_src and "明文广播" in dw_src)
     # ★2（2026-10-21 复审）实证过的那一击就是这个自测自己打的：它 curl 明文 80 上的
     # 秘密入口，token 进了 access.log（当时 grep 判的是「响应头」，头干净、日志脏）。
@@ -4630,6 +4638,25 @@ def run_tests(srv: Server, port: int, tok: str, state_dir: Path) -> None:
         "不往 **error_log** 写" in dw_src
         and "它不管 access.log" in dw_src
         and "80 上乱路径扫描的 open() 噪音不进 error_log" in dw_src)
+
+    # ── T62：return 型 location 的显式限速（资源层⑥实弹测试，2026-11-17）────────
+    # return 在 rewrite 阶段短路，早于 limit_req/limit_conn 所在的 preaccess 阶段——
+    # server 级限速对兜底 location / 的乱路径洪水完全不生效（实弹实锤：44 r/s 零 429，
+    # 按 4Mbps 攻击带宽可推 ~3.4GB/h 的 access.log 增量，「B 方案 200MB/天」预算即建于
+    # 此漏洞之上）。修法=return 型 location 全部显式 include cms-ratelimit-loc.conf
+    # （nginx 规则：location 有自己的 limit_req 就不再继承 server 级，照抄参数是刻意显式化）。
+    # 三条不变量：片段四条指令齐全；全部 return 型 location 都挂了它；自测有乱路径 429 闸。
+    chk("T62 ★ ratelimit-loc 片段存在且四条指令齐全（与 server 级同参，注释写明 rewrite 阶段绕过原理）",
+        "snippets/cms-ratelimit-loc.conf\" <<'RATELIMIT'" in dw_src
+        and dw_src.count("limit_req  zone=cms_perip burst=40 nodelay;") >= 2
+        and "rewrite 阶段就终止请求" in dw_src
+        and "limit_conn_status 429;" in dw_src)
+    chk("T62 ★ 全部 return 型 location 都 include 了 ratelimit-loc"
+        "（80 块 gate+兜底 ×2、landing 两模板各 ×3）",
+        dw_src.count("include /etc/nginx/snippets/cms-ratelimit-loc.conf;") == 8)
+    chk("T62 ★ 自测带乱路径 429 防再犯闸（nf-selftest 连打）——缺它就是当初的假绿灯",
+        "/nf-selftest-" in dw_src
+        and "兜底 location 的 return 绕过了限速" in dw_src)
 
     # ── T63：学习站 immutable 长缓存（资源层③，2026-11-16）────────────────
     # /learn/ 静态资源 public, max-age=2592000, immutable + 入口 no-cache；击穿靠
@@ -7054,6 +7081,38 @@ print(json.dumps({"summary": {"games": games}}))   # 真 solver 末尾必打；r
             not bad74, "; ".join(bad74)[:160])
         chk("T74 读不懂的返回 None（按「没开番茄钟」处理，绝不默认成 0 秒让全舰队瞎歇）",
             all(ds74mod.pomo_dur(s) is None for s in ("abc", "5x", "m", "1hm", "-5m")))
+
+        # ── T94：2026-11-17 磁盘增速告警的三个灌盘源（ BrokenPipe 堆栈 / done 区 9.4MB / 阿里云代理日志）──
+        chk("T94 ★ 连接层异常静默：QuietHTTPServer 覆盖 handle_error，只吞连接类（真 bug 堆栈照旧留痕）",
+            "class QuietHTTPServer(ThreadingHTTPServer):" in ds74
+            and "def handle_error(self, request, client_address):" in ds74
+            and "(BrokenPipeError, ConnectionResetError, TimeoutError)" in ds74
+            and "srv = QuietHTTPServer((host, port), Handler)" in ds74)
+        chk("T94 ★ done 两层化的形状：常量/合并/老化三件齐全，save_state 过滤已归档条目",
+            "DONE_ARCHIVE = os.path.join(STATE_DIR, \"done-archive.jsonl\")" in ds74
+            and "DONE_KEEP_RECENT = 500" in ds74
+            and "def _merge_done_archive(st):" in ds74 and "done.setdefault(tid, rec)" in ds74
+            and "def _split_done(done):" in ds74
+            and "os.chmod(DONE_ARCHIVE, 0o600)" in ds74
+            and "if tid not in _archived_ids}" in ds74)
+        chk("T94 ★ 阿里云代理日志限容片段随 deploy-dist.sh 落位（copytruncate：代理不认 HUP）",
+            (root / "server" / "cms-aliyun-agents.logrotate").exists()
+            and "copytruncate" in (root / "server" / "cms-aliyun-agents.logrotate").read_text(encoding="utf-8")
+            and "cms-aliyun-agents.logrotate\" ${CMS_HOST}:/etc/logrotate.d/cms-aliyun-agents"
+            in (root / "scripts" / "dist" / "deploy-dist.sh").read_text(encoding="utf-8")
+            and "logrotate -d" in (root / "scripts" / "dist" / "deploy-dist.sh").read_text(encoding="utf-8"))
+        st94 = {"config": {}, "queue": [], "inprog": {},
+                "done": {f"t{i}-x": {"time": float(i), "wins": i % 7} for i in range(600)}}
+        ds74mod.save_state(st94)
+        disk94 = json.load(open(os.path.join(ds74mod.STATE_DIR, "state.json")))
+        re94 = ds74mod.load_state()
+        chk("T94 ★ done 两层化往返账：磁盘文档裁到 500 内、archive 落盘、读回内存全量一致",
+            os.path.exists(ds74mod.DONE_ARCHIVE)
+            and len(disk94.get("done", {})) <= 500
+            and len(re94["done"]) == 600
+            and len(ds74mod._archived_ids) >= 100
+            and re94["done"]["t0-x"]["wins"] == 0
+            and re94["done"]["t599-x"]["wins"] == 599 % 7)
         base74 = time.time()
 
         def wire74(server_now):

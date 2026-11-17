@@ -22,6 +22,10 @@ $SSH "mkdir -p /opt/cmsdist /var/lib/cmsdist/results && chown -R cmsgate:cmsgate
 $SCP "$HERE/tools/dist_server.py" ${CMS_HOST}:/opt/cmsdist/dist_server.py
 $SCP "$HERE/server/cmsdist.service" ${CMS_HOST}:/etc/systemd/system/cmsdist.service
 
+echo "==> 阿里云代理日志限容（argusagent/hbr/assist ~50MB/h 灌盘，见片段头注释）"
+$SCP "$HERE/server/cms-aliyun-agents.logrotate" ${CMS_HOST}:/etc/logrotate.d/cms-aliyun-agents
+$SSH "logrotate -d /etc/logrotate.d/cms-aliyun-agents >/dev/null"   # dry-run 验语法，配置错了当场炸
+
 echo "==> 初始化（state/secret 已存在则不动）"
 $SSH "test -f /var/lib/cmsdist/state.json || python3 -c \"
 import sys; sys.path.insert(0, '/opt/cmsdist')

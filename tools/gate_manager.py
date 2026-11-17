@@ -2230,8 +2230,13 @@ LANDING_MODES = ("game", "learn")
 #: `location = /game` 的 body 必须与 learn 那份逐字一致（唯一的游戏入口）。
 LANDING_GAME = """# landing-mode: game
 # 开放站：根路径与任何未定义路径都 302 到 /game；游戏是否可见由 /game 的闸门决定
+# 302 一律由 error_page 引到命名 location 完成：直接 return 在 rewrite 阶段终止
+# 请求，本 location 的 limit_req（preaccess 阶段）执行不到，等于不限速
+# （2026-11-17 实弹自打实锤）。try_files 制造 404 前，限速已经拦过一轮。
 location = / {
-    return 302 /game;
+    include /etc/nginx/snippets/cms-ratelimit-loc.conf;
+    error_page 404 = @cms_landing_to_game;
+    try_files /nonexistent =404;
 }
 
 # 游戏入口：必须登录；未登录由 error_page 映射成 404「当作不存在」
@@ -2245,13 +2250,21 @@ location = /game {
 
 # 带斜杠的写法纠正到 /game。302 不用 301：换路由方案时别让浏览器被永久缓存钉住
 location = /game/ {
-    return 302 /game;
+    include /etc/nginx/snippets/cms-ratelimit-loc.conf;
+    error_page 404 = @cms_landing_to_game;
+    try_files /nonexistent =404;
 }
 
 # 兜底：其他任何路径都去游戏（开放站希望访客直接落到游戏，而不是看见 404）
 location / {
     add_header Cache-Control "no-store" always;
     include /etc/nginx/snippets/cms-security-headers.conf;
+    include /etc/nginx/snippets/cms-ratelimit-loc.conf;
+    error_page 404 = @cms_landing_to_game;
+    try_files /nonexistent =404;
+}
+
+location @cms_landing_to_game {
     return 302 /game;
 }
 """
@@ -2259,8 +2272,12 @@ location / {
 #: learn 模式全文：默认页 = 公开学习站。根路径 302 到 /learn/，游戏只在 /game。
 LANDING_LEARN = """# landing-mode: learn
 # 学习站：根路径 302 到公开学习站 /learn/；游戏只在 /game，其余路径一律 404
+# 302 由 error_page 引到命名 location 完成（直接 return 在 rewrite 阶段终止请求，
+# 限速执行不到 —— 2026-11-17 实弹自打实锤）；兜底 404 用 try_files 在内容阶段产生。
 location = / {
-    return 302 /learn/;
+    include /etc/nginx/snippets/cms-ratelimit-loc.conf;
+    error_page 404 = @cms_landing_to_learn;
+    try_files /nonexistent =404;
 }
 
 # 游戏入口：必须登录；未登录由 error_page 映射成 404「当作不存在」
@@ -2274,14 +2291,24 @@ location = /game {
 
 # 带斜杠的写法纠正到 /game。302 不用 301：换路由方案时别让浏览器被永久缓存钉住
 location = /game/ {
-    return 302 /game;
+    include /etc/nginx/snippets/cms-ratelimit-loc.conf;
+    error_page 404 = @cms_landing_to_game;
+    try_files /nonexistent =404;
 }
 
 # 兜底：学习站模式下，除 /learn/ 与 /game 之外的任何路径一律 404（不承认受保护内容）
 location / {
     add_header Cache-Control "no-store" always;
     include /etc/nginx/snippets/cms-security-headers.conf;
-    return 404;
+    include /etc/nginx/snippets/cms-ratelimit-loc.conf;
+    try_files /nonexistent =404;
+}
+
+location @cms_landing_to_learn {
+    return 302 /learn/;
+}
+location @cms_landing_to_game {
+    return 302 /game;
 }
 """
 

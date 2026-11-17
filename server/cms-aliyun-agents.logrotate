@@ -1,0 +1,19 @@
+# 阿里云监控代理日志限容（2026-11-17）：开通云监控 2.0 后 argusagent / hbr / assist
+# 稳定灌盘 ~50MB/h，是磁盘增速告警（>100MB/h 地板）的最大单一来源。
+# copytruncate：这些代理不认 HUP，轮转后拿旧 fd 继续写，只有截断原地文件才有效；
+# 代价是截断到复制之间可能丢几行日志——监控代理日志可接受。
+# maxsize 20M + daily：单文件超 20M 当天就轮，平时每天一轮；只留 3 份压缩档，
+# 每个路径最坏占用 <100MB。missingok/notifempty：没装的组件不报错。
+/usr/local/cloudmonitor/local_data/logs/*.log
+/opt/alibabacloud/hbrclient/logs/*.log
+/usr/local/share/aliyun-assist/log/*.log {
+    daily
+    maxsize 20M
+    rotate 3
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    su root root
+}
