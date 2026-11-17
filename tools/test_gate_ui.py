@@ -7093,7 +7093,8 @@ print(json.dumps({"summary": {"games": games}}))   # 真 solver 末尾必打；r
             and "DONE_KEEP_RECENT = 500" in ds74
             and "def _merge_done_archive(st):" in ds74 and "done.setdefault(tid, rec)" in ds74
             and "def _split_done(done):" in ds74
-            and "os.chmod(DONE_ARCHIVE, 0o600)" in ds74
+            and "os.open(DONE_ARCHIVE, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)" in ds74
+            and "os.fchmod(f.fileno(), 0o600)" in ds74
             and "if tid not in _archived_ids}" in ds74)
         chk("T94 ★ 阿里云代理日志限容片段随 deploy-dist.sh 落位（copytruncate：代理不认 HUP）",
             (root / "server" / "cms-aliyun-agents.logrotate").exists()

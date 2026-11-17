@@ -240,6 +240,16 @@ if [ ! -d "$BASELINE_DIR" ] && ! mkdir -p "$BASELINE_DIR" 2>/dev/null; then
     echo "WARN: 基线目录 ${BASELINE_DIR} 不存在且建不了（unit 沙箱没开口？）——第 14~16 项本轮跳过"
 else
     [ -r "$BASELINE" ] && . "$BASELINE"
+    # 基线文件数值域钳制：文件写坏/被动手脚成非数值时宁可当 0 重攒样本——垃圾值
+    # 进差分会直接语法报错或让 awk 比较不可预期（计数字段被清成负数/垃圾可把慢刀子
+    # 告警静默约 24h）。D_EMA/D_U1 等允许负值（logrotate 删除也是真实基线），只验形不验号。
+    clamp_num() {
+        awk -v v="$1" 'BEGIN{ if (v ~ /^-?[0-9]+(\.[0-9]+)?$/) print v; else print 0 }'
+    }
+    for k in LAST_TS LAST_USEDKB LAST_TX D_T1 D_U1 D_T2 D_U2 \
+             LAT_EMA LAT_N D_EMA D_N TX_EMA TX_N; do
+        eval "${k}=\$(clamp_num \"\${${k}:-0}\")"
+    done
     state_flush() {
         # 原子写：先落 .tmp 再 mv，断电/中断不会留下半个状态文件（半个文件 source 进来就是垃圾）
         cat > "$BASELINE.tmp" <<EOF

@@ -287,8 +287,11 @@ limit_conn_zone $binary_remote_addr zone=cms_conn:10m;
 limit_req_zone  $binary_remote_addr zone=cms_login:10m rate=10r/m;
 RATELIMIT
 
-# 内部握手占位符在此替换：密钥是纯十六进制（sed/nginx 双安全），conf 其余内容一字不展开
-sed "s#__CMSGATE_INTERNAL__#${CMSGATE_INTERNAL_KEY}#g" <<'NGINX' | $SSH "$SERVER" "cat > /etc/nginx/sites-available/complexminesweeper"
+# 内部握手占位符在此替换：密钥走 awk 的 ENVIRON（进程环境不落 /proc/<pid>/cmdline，
+# argv 路线的 sed "s#...#${KEY}#" 会把密钥裸给 ps aux 抄走）；密钥是纯十六进制，
+# gsub 替换串无 & / 反斜杠特义。conf 其余内容一字不展开。
+export CMSGATE_INTERNAL_KEY
+awk '{gsub(/__CMSGATE_INTERNAL__/, ENVIRON["CMSGATE_INTERNAL_KEY"]); print}' <<'NGINX' | $SSH "$SERVER" "cat > /etc/nginx/sites-available/complexminesweeper"
 # 复数扫雷网页版 —— 明文通道收口（2026-10-20 裁决）后是**两个 server 块**：
 #   块一（80，default_server）  只做两件事：接 ACME 挑战文件、把其余一切 302 到 https。
 #                               它不再 serving 任何内容，所以闸门逻辑不用在这儿重写一遍。

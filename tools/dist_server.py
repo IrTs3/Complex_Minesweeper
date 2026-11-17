@@ -323,22 +323,25 @@ def _split_done(done):
     fresh = [(tid, rec) for tid, rec in overflow if tid not in _archived_ids]
     if not fresh:
         return
-    with open(DONE_ARCHIVE, "a", encoding="utf-8") as f:
+    # ★ 首建竞态：os.open(..., O_CREAT, 0o600) 让权限在创建那一刻就落定。原写法
+    #   open("a") 先按 umask 0644 建好文件、写完 IP+机器名才 chmod——窗口内崩溃
+    #   则文件永久 0644，同机其他账户可读全舰队身份。
+    fd = os.open(DONE_ARCHIVE, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    with os.fdopen(fd, "a", encoding="utf-8") as f:
+        # O_CREAT 的 mode 会被 umask 削，这里钉死一次不花钱；root 跑 admin 写命令时
+        # 属主是 root——服务下次 append 直接 EACCES 楔死（state.json 真踩过），写前还主。
+        os.fchmod(f.fileno(), 0o600)
+        if os.geteuid() == 0:
+            try:
+                d = os.stat(STATE_DIR)
+                os.fchown(f.fileno(), d.st_uid, d.st_gid)
+            except OSError:
+                pass
         for tid, rec in fresh:
             f.write(json.dumps({"tid": tid, "rec": rec}, ensure_ascii=False,
                                separators=(",", ":")) + "\n")
         f.flush()
         os.fsync(f.fileno())
-    # state.json 0600 同款纪律：archive 里同样有 IP 与机器名，走 umask 会得到 0644；
-    # root 跑 admin 写命令时还得把属主还给 cmsgate——root 属主会让服务下次 append
-    # 直接 EACCES（真发生过：root 属主 state.json → 全服务楔死）。
-    os.chmod(DONE_ARCHIVE, 0o600)
-    if os.geteuid() == 0:
-        try:
-            d = os.stat(STATE_DIR)
-            os.chown(DONE_ARCHIVE, d.st_uid, d.st_gid)
-        except OSError:
-            pass
     _archived_ids.update(tid for tid, _ in fresh)
     _archive_cache.update(fresh)   # 缓存同步：磁盘文档已不含这些条目，下次 load 靠缓存合并回来
 
@@ -797,7 +800,9 @@ def handle_result(handler, payload):
                                       "nn_ver": nn_ver},
                            "claimed_at": t["claimed_at"], "done_at": rec["time"],
                            "records": records}, ensure_ascii=False).encode()
-        tmp = os.path.join(RESULTS_DIR, f"{tid}.json.gz.tmp")
+        fd, tmp = tempfile.mkstemp(dir=RESULTS_DIR, prefix=f"{tid}.", suffix=".json.gz.tmp")
+        os.fchmod(fd, 0o600)   # blob 含 ip/name，mkstemp 自带 0600，不走 umask 0644
+        os.close(fd)
         with gzip.open(tmp, "wb", compresslevel=9) as f:
             f.write(blob)
         os.replace(tmp, os.path.join(RESULTS_DIR, f"{tid}.json.gz"))
@@ -831,6 +836,18 @@ class Handler(BaseHTTPRequestHandler):
         # 任务结果本就永久落在 state.json 的 done 区与 results/*.json.gz，
         # 成功访问的逐条日志纯属重复存储；真异常走下面的 log_error，仍进 journal。
         pass
+
+    def log_request(self, code='-', size='-'):
+        # log_message 静音后，4xx/5xx 也不能跟着一起哑：403 bad nonce / 409 / 410
+        # 全走 send_response→log_request，这里再吞掉的话爆破 nonce、扫路径就是
+        # 零足迹（拒绝峰值运维不可见）。只放行 ≥400 到 log_error（带来源 IP），
+        # 2xx 维持静音防日志洪水。
+        try:
+            bad = int(code) >= 400
+        except (TypeError, ValueError):
+            bad = False
+        if bad:
+            self.log_error('"%s" %s %s', self.requestline, str(code), str(size))
 
     def log_error(self, fmt, *args):
         sys.stderr.write("%s - %s\n" % (self.client_address[0], fmt % args))
@@ -1468,7 +1485,9 @@ def _finish_recheck(handler, st, tid, t, records, name, osname, solver_ver, clie
                                   "nn_ver": nn_ver},
                        "claimed_at": t["claimed_at"], "done_at": time.time(),
                        "records": records}, ensure_ascii=False).encode()
-    tmp = os.path.join(RESULTS_DIR, f"{tid}.rc{k}.json.gz.tmp")
+    fd, tmp = tempfile.mkstemp(dir=RESULTS_DIR, prefix=f"{tid}.rc{k}.", suffix=".json.gz.tmp")
+    os.fchmod(fd, 0o600)
+    os.close(fd)
     with gzip.open(tmp, "wb", compresslevel=9) as f:
         f.write(blob)
     os.replace(tmp, os.path.join(RESULTS_DIR, f"{tid}.rc{k}.json.gz"))
