@@ -323,13 +323,14 @@ EOF
             if [ "$D_N" -lt 720 ]; then
                 echo "基线采集中（磁盘）：n=${D_N}/720，本轮 ${d_rate} MB/h EMA=${D_EMA} —— 满约 24h 才开始判红"
             elif awk -v s="$d_rate" -v e="$D_EMA" 'BEGIN{exit !(s>5*e && s>100)}'; then
-                ping_fail "磁盘增速异常：+${d_rate} MB/h（滚动基线 ${D_EMA} MB/h，>5 倍且 >100MB/h 地板）—— 慢刀子：日志洪水 / 被塞盘，盘满时第 5 项才亮已太迟"
+                disk_alarm="磁盘增速异常：+${d_rate} MB/h（滚动基线 ${D_EMA} MB/h，>5 倍且 >100MB/h 地板）—— 慢刀子：日志洪水 / 被塞盘，盘满时第 5 项才亮已太迟"
             fi
         fi
         # 窗口右移：LAST_TS/LAST_USEDKB 顺位进窗，最老的出局。重启后头两轮窗不满
         # （D_T1=0 或跨度 <2 分钟）只攒样本不判红。
         D_T1=${D_T2:-0}; D_U1=${D_U2:-0}; D_T2=${LAST_TS:-0}; D_U2=${LAST_USEDKB:-0}
         # 出站速率 Mbit/s。计数器回绕（tx < 上次值）说明网卡重启/换过，本轮差分作废只记新值。
+        tx_alarm=""
         if [ "$tx_bytes" -ge "$LAST_TX" ]; then
             tx_rate=$(awk -v t="$tx_bytes" -v lt="$LAST_TX" -v dt="$dt" 'BEGIN{printf "%.2f", (t-lt)*8/1000000/dt}')
             if [ "${TX_N:-0}" -ge 1 ]; then
@@ -341,7 +342,7 @@ EOF
             if [ "$TX_N" -lt 720 ]; then
                 echo "基线采集中（出站）：n=${TX_N}/720，本轮 ${tx_rate} Mbit/s EMA=${TX_EMA} —— 满约 24h 才开始判红"
             elif awk -v s="$tx_rate" -v e="$TX_EMA" 'BEGIN{exit !(s>3*e && s>15)}'; then
-                ping_fail "出站速率异常：${tx_rate} Mbit/s（滚动基线 ${TX_EMA}，>3 倍且 >15Mbit/s 地板）—— 慢刀子：带宽被拉满，正常用户已在挨饿（固定带宽就是钱，云侧账单告警之外的应用视角）"
+                tx_alarm="出站速率异常：${tx_rate} Mbit/s（滚动基线 ${TX_EMA}，>3 倍且 >15Mbit/s 地板）—— 慢刀子：带宽被拉满，正常用户已在挨饿（固定带宽就是钱，云侧账单告警之外的应用视角）"
             fi
         else
             echo "SKIP: 出站计数器回绕（${tx_bytes} < ${LAST_TX}）—— 网卡重启过，本轮差分作废"
@@ -351,6 +352,12 @@ EOF
     LAST_USEDKB=$used_kb
     LAST_TX=$tx_bytes
     state_flush || echo "WARN: 基线文件写回失败 —— 下轮差分从零开始，磁盘/出站两项要重新攒样本"
+    # ★ 判红必须在状态持久化**之后**：ping_fail 会 exit 0，放在前面的话失败轮的样本
+    #   进不了窗口、锚点冻结在出事前的时刻，读数永远对着旧锚点 → 告警自锁（2026-11-18
+    #   实锤：journald 清空手术期间锚点卡死，38 连红，磁盘早已平稳、读数只能靠 span
+    #   变长被动衰减，要 4h 才能自然解套）。采样归采样、判罚归判罚，先记账再开枪。
+    [ -n "${disk_alarm:-}" ] && ping_fail "$disk_alarm"
+    [ -n "${tx_alarm:-}" ] && ping_fail "$tx_alarm"
 fi
 
 # 17) 服务器专属扩展段（QQbot 探活等，不进仓库）：独立文件、存在即加载。加载点放在
