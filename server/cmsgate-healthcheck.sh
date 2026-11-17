@@ -246,6 +246,10 @@ else
 LAST_TS=${LAST_TS:-0}
 LAST_USEDKB=${LAST_USEDKB:-0}
 LAST_TX=${LAST_TX:-0}
+D_T1=${D_T1:-0}
+D_U1=${D_U1:-0}
+D_T2=${D_T2:-0}
+D_U2=${D_U2:-0}
 LAT_EMA=${LAT_EMA:-0}
 LAT_N=${LAT_N:-0}
 D_EMA=${D_EMA:-0}
@@ -302,19 +306,29 @@ EOF
     tx_bytes=$(grep -v ':lo' /proc/net/dev 2>/dev/null | awk '{sub(/^[^:]+:/,""); s+=$10} END{printf "%.0f", s+0}')
     if [ "${LAST_TS:-0}" -gt 0 ] && [ $((now - LAST_TS)) -ge 60 ]; then
         dt=$((now - LAST_TS))
-        # 磁盘增速 MB/h（可为负：logrotate 压缩/删除也是真实基线的一部分）
-        d_rate=$(awk -v u="$used_kb" -v lu="$LAST_USEDKB" -v dt="$dt" 'BEGIN{printf "%.2f", (u-lu)/1024/(dt/3600)}')
-        if [ "${D_N:-0}" -ge 1 ]; then
-            D_EMA=$(awk -v e="${D_EMA:-0}" -v s="$d_rate" 'BEGIN{printf "%.2f", e*0.95+s*0.05}')
-        else
-            D_EMA=$d_rate
+        # 磁盘增速 MB/h（可为负：logrotate 压缩/删除也是真实基线的一部分）。
+        # 3 轮滑动窗差分（D_T1 是三轮前的样本，跨度约 6 分钟）：单轮差分 ×30 外推
+        # 会被突发写入放大成假警报（2026-11-17 22:27 实例：代理日志一次刷几 MB，
+        # 2 分钟读数冲到 128MB/h，下一轮没突发就自愈回 UP——真警报反而吵不醒人）；
+        # 窗内平均后要持续灌满整个窗口才过 100MB/h 地板，单发突发与慢刀子真洪水的
+        # 区分度就出来了。
+        if [ "${D_T1:-0}" -gt 0 ] && [ $((now - D_T1)) -ge 120 ]; then
+            d_rate=$(awk -v u="$used_kb" -v lu="${D_U1:-$used_kb}" -v dt=$((now - D_T1)) 'BEGIN{printf "%.2f", (u-lu)/1024/(dt/3600)}')
+            if [ "${D_N:-0}" -ge 1 ]; then
+                D_EMA=$(awk -v e="${D_EMA:-0}" -v s="$d_rate" 'BEGIN{printf "%.2f", e*0.95+s*0.05}')
+            else
+                D_EMA=$d_rate
+            fi
+            D_N=$(( ${D_N:-0} + 1 ))
+            if [ "$D_N" -lt 720 ]; then
+                echo "基线采集中（磁盘）：n=${D_N}/720，本轮 ${d_rate} MB/h EMA=${D_EMA} —— 满约 24h 才开始判红"
+            elif awk -v s="$d_rate" -v e="$D_EMA" 'BEGIN{exit !(s>5*e && s>100)}'; then
+                ping_fail "磁盘增速异常：+${d_rate} MB/h（滚动基线 ${D_EMA} MB/h，>5 倍且 >100MB/h 地板）—— 慢刀子：日志洪水 / 被塞盘，盘满时第 5 项才亮已太迟"
+            fi
         fi
-        D_N=$(( ${D_N:-0} + 1 ))
-        if [ "$D_N" -lt 720 ]; then
-            echo "基线采集中（磁盘）：n=${D_N}/720，本轮 ${d_rate} MB/h EMA=${D_EMA} —— 满约 24h 才开始判红"
-        elif awk -v s="$d_rate" -v e="$D_EMA" 'BEGIN{exit !(s>5*e && s>100)}'; then
-            ping_fail "磁盘增速异常：+${d_rate} MB/h（滚动基线 ${D_EMA} MB/h，>5 倍且 >100MB/h 地板）—— 慢刀子：日志洪水 / 被塞盘，盘满时第 5 项才亮已太迟"
-        fi
+        # 窗口右移：LAST_TS/LAST_USEDKB 顺位进窗，最老的出局。重启后头两轮窗不满
+        # （D_T1=0 或跨度 <2 分钟）只攒样本不判红。
+        D_T1=${D_T2:-0}; D_U1=${D_U2:-0}; D_T2=${LAST_TS:-0}; D_U2=${LAST_USEDKB:-0}
         # 出站速率 Mbit/s。计数器回绕（tx < 上次值）说明网卡重启/换过，本轮差分作废只记新值。
         if [ "$tx_bytes" -ge "$LAST_TX" ]; then
             tx_rate=$(awk -v t="$tx_bytes" -v lt="$LAST_TX" -v dt="$dt" 'BEGIN{printf "%.2f", (t-lt)*8/1000000/dt}')

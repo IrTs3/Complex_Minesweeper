@@ -274,13 +274,23 @@ DONE_KEEP_RECENT = 500
 #: 本进程已写进 archive 的 task_id。load 时从 archive 文件重建，save 时据此把
 #: 老条目从 state.json 的 done 里排除。archive 同行可重复（崩溃窗口），合并幂等。
 _archived_ids = set()
+#: archive 的 tid->rec 内存缓存。**进程生命周期只从磁盘解析一次**——第一版把它放进
+#: load_state 的每请求路径，2 万行 × 每请求重读 = 舰队一晚烧掉近 4h CPU（2026-11-17
+#: 实测 cputime 3h53m / etime 5h28m）。之后 append 只走 _split_done（同步更新缓存），
+#: 重启前外部改动不被看见——archive 是本进程独占的 append-only 文件，不存在外部改。
+_archive_cache = {}
+#: 缓存已初始化标记。不能用「cache/ids 非空」当判据：save_state 先于首次 load 时
+#: _archived_ids 已被 _split_done 填过，会被误判成「已从文件读过」而整份跳过合并。
+_archive_cache_ready = False
 
 
-def _merge_done_archive(st):
-    global _archived_ids
+def _load_archive_cache():
+    global _archive_cache, _archived_ids, _archive_cache_ready
+    if _archive_cache_ready:
+        return
+    _archive_cache_ready = True    # 无论文件存不存在，本进程只从磁盘读这一次
     if not os.path.exists(DONE_ARCHIVE):
         return
-    done = st.setdefault("done", {})
     with open(DONE_ARCHIVE, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -294,7 +304,16 @@ def _merge_done_archive(st):
             if not tid or not isinstance(rec, dict):
                 continue
             _archived_ids.add(tid)
-            done.setdefault(tid, rec)   # state.json 里的（更新）优先
+            _archive_cache[tid] = rec
+
+
+def _merge_done_archive(st):
+    _load_archive_cache()
+    if not _archive_cache:
+        return
+    done = st.setdefault("done", {})
+    for tid, rec in _archive_cache.items():
+        done.setdefault(tid, rec)   # state.json 里的（更新）优先
 
 
 def _split_done(done):
@@ -321,6 +340,7 @@ def _split_done(done):
         except OSError:
             pass
     _archived_ids.update(tid for tid, _ in fresh)
+    _archive_cache.update(fresh)   # 缓存同步：磁盘文档已不含这些条目，下次 load 靠缓存合并回来
 
 
 def save_state(st):

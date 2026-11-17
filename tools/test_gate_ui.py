@@ -7113,6 +7113,17 @@ print(json.dumps({"summary": {"games": games}}))   # 真 solver 末尾必打；r
             and len(ds74mod._archived_ids) >= 100
             and re94["done"]["t0-x"]["wins"] == 0
             and re94["done"]["t599-x"]["wins"] == 599 % 7)
+        # 缓存只解析一次：往 archive 追加一条新记录后再 load，不得重读文件——第一版把
+        # 合并放进每请求路径，2 万行 × 每请求重 parse，舰队一晚烧掉近 4h CPU（实锤）。
+        with open(ds74mod.DONE_ARCHIVE, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"tid": "t-late-x", "rec": {"time": 1.0, "wins": 1}}) + "\n")
+        re94b = ds74mod.load_state()
+        chk("T94 ★ archive 缓存只解析一次：load_state 不逐请求重读文件（追加行重启前不可见是既定语义）",
+            "t-late-x" not in re94b["done"]
+            and len(re94b["done"]) == 600
+            and "def _load_archive_cache" in ds74
+            and "_archive_cache[tid] = rec" in ds74)
+        os.remove(ds74mod.DONE_ARCHIVE)
         base74 = time.time()
 
         def wire74(server_now):
