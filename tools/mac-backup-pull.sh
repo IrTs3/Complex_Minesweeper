@@ -1,5 +1,6 @@
 #!/bin/bash
-# 从服务器拉闸门快照到 ~/Backups/cms/（异地备份的 Mac 侧），本地保留 1000 份，600。
+# 从服务器拉闸门快照到 ~/Backups/cms/（异地备份的 Mac 侧），600。五类各自轮转
+# （cms 留 1000 份长历史≈0.8G；bot-cfg 36M/份只留 30 份，1000 份会把 Mac 满仓撑到 39G）。
 # 由 LaunchAgent com.cms.gate-backup-pull 每小时 + 每次登录触发（服务器 03:17 出快照；
 # 用 StartInterval 而不是固定 07:23，免得合盖过夜就静默漏掉一天）。
 # 走**出站** ssh（复用部署用的 root 密钥），服务器不新增任何入站暴露面。
@@ -54,7 +55,7 @@ hc_send() {
 trap 'rc=$?; if [ "$rc" != 0 ]; then hc_send "/fail" "Mac 备份拉取失败（退出码 ${rc}）：详见 ~/Library/Logs/cmsgate/pull.err"; fi' EXIT
 
 install -d -m 700 "$DEST"
-# 不带 --delete：Mac 侧保留历史（服务器只留 28 份，Mac 留 1000 份 = 更长历史）
+# 不带 --delete：Mac 侧保留历史（服务器只留 8~28 份，Mac 按五类各自上限轮转）
 rsync -az -e "ssh -p ${SSH_PORT} -o BatchMode=yes -o ConnectTimeout=10" \
     "${SERVER}:/root/cms-backup/" "$DEST"/
 
@@ -62,7 +63,7 @@ shopt -s nullglob
 # 五类快照各自轮转。★ 这里曾经只处理 cms-*：bot-cfg/bot-ntqq 由 rsync 拉进来后
 # **既不 chmod 也永不轮转**，等于每天 89M 无限堆积（2026-11-02 加跑分快照时才发现）。
 # dist-full 是每周的明细整包，留 8 份 = 两个月；dist-meta 每天，留 28 份对齐服务器。
-for spec in "cms:1000" "bot-cfg:1000" "bot-ntqq:24" "dist-meta:28" "dist-full:8"; do
+for spec in "cms:1000" "bot-cfg:30" "bot-ntqq:24" "dist-meta:28" "dist-full:8"; do
     pfx=${spec%%:*}
     keep=${spec##*:}
     files=("$DEST"/${pfx}-*.tar.gz)

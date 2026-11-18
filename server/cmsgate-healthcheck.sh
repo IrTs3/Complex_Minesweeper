@@ -332,6 +332,13 @@ EOF
             D_N=$(( ${D_N:-0} + 1 ))
             if [ "$D_N" -lt 720 ]; then
                 echo "基线采集中（磁盘）：n=${D_N}/720，本轮 ${d_rate} MB/h EMA=${D_EMA} —— 满约 24h 才开始判红"
+            elif systemctl is-active --quiet cmsgate-backup.service 2>/dev/null \
+                || find /root/cms-backup -name '*.tar.gz' -mmin -10 2>/dev/null | grep -q .; then
+                # 写盘者是身份明确的自己人：每日备份正在跑（服务 active，或 10 分钟内
+                # 有新快照落盘=窗口右端跨到了备份上）。191M 的 gzip 灌 3 分钟就是
+                # 1.6GB/h，滑动窗照样炸——这不是塞盘攻击（2026-11-18 凌晨 03:20 实弹，
+                # 周三全量备份首撞武装基线）。样本照常进基线，只是不开枪。
+                echo "SKIP: 每日备份写盘窗——本轮磁盘增速 ${d_rate} MB/h 只记账不判红"
             elif awk -v s="$d_rate" -v e="$D_EMA" 'BEGIN{exit !(s>5*e && s>100)}'; then
                 disk_alarm="磁盘增速异常：+${d_rate} MB/h（滚动基线 ${D_EMA} MB/h，>5 倍且 >100MB/h 地板）—— 慢刀子：日志洪水 / 被塞盘，盘满时第 5 项才亮已太迟"
             fi

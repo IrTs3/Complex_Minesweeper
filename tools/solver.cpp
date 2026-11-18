@@ -402,7 +402,7 @@ int main(int argc, char** argv) {
             int c, r, m; char x1, x2;
             if (sscanf(argv[++i], "%d%c%d%c%d", &c, &x1, &r, &x2, &m) == 5 && x1 == 'x' && x2 == 'x'
                 && c >= 2 && r >= 2 && m > 0 && m < c * r) {
-                static char buf[32];
+                static char buf[48];   // 32 装不下极限尺寸（3×10 位数字 + 分隔），snprintf 会截断显示名
                 snprintf(buf, sizeof buf, "CUSTOM %dx%dx%d", c, r, m);
                 customName = buf; customCols = c; customRows = r; customMines = m;
             } else { printf("--board 格式：CxRxM（如 30x16x99），且雷数 < 行*列\n"); return 1; }

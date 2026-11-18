@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // nn.ts — 学生网络（.cnnw）加载、f32 前向与显示模型编码（纯 TS，零依赖）。
 //
 // 契约唯一出处 tools/nn/dump_format.md；与 C++ 权威实现（src/solver/NNForward.h 的

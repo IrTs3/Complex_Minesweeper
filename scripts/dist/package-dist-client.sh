@@ -266,7 +266,7 @@ else
         src/solver/NNForward.h"
     if ssh -p ${CMS_SSH_PORT} ${CMS_HOST} \
         "command -v g++ >/dev/null || apt-get install -y g++ >/dev/null; rm -rf /tmp/cmsdist-build && mkdir -p /tmp/cmsdist-build" \
-        && tar -C "$HERE" -czf "$BUILD/linux-src.tgz" $LINUX_SRCS \
+        && tar -C "$HERE" --no-xattrs -czf "$BUILD/linux-src.tgz" $LINUX_SRCS \
         && cat "$BUILD/linux-src.tgz" | ssh -p ${CMS_SSH_PORT} ${CMS_HOST} "tar -xzf - -C /tmp/cmsdist-build" \
         && ssh -p ${CMS_SSH_PORT} ${CMS_HOST} \
         "g++ -O2 -std=c++17 -I /tmp/cmsdist-build/src '-DSOLVER_VER=\"$SOLVER_VER\"' \

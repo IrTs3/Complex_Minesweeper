@@ -87,7 +87,20 @@ if [ -f "$DIST/state.json" ]; then
     ls -1t "$DEST"/dist-meta-*.tar.gz | tail -n +29 | xargs -r rm -f
     echo "跑分索引快照完成：$(basename "$(ls -1t "$DEST"/dist-meta-*.tar.gz | head -1)")，现有 $(ls -1 "$DEST"/dist-meta-*.tar.gz | wc -l | tr -d ' ') 份"
     if [ "$DOW" = 3 ]; then
-        tar -czf "$DEST/dist-full-${STAMP}.tar.gz" -C "$DIST" state.json secret results
+        # ★ results/ 是追加式目录（一个任务写一次、永不回头改），机队 7×24 在跑，
+        #   打包的几分钟里几乎必然有新结果落盘 → tar 退出码 1（有文件边读边变）。
+        #   包本身仍是有效时点快照：save_state 走 mkstemp+os.replace，tar 读到的
+        #   都是替换前或替换后的完整文件。所以 0/1 都算成功、半成品照常扶正；
+        #   只有 ≥2（真错误：磁盘满/参数坏）才删半成品失败退出。
+        #   191M 的 gzip 写盘会顶到探活第 15 项的滑动窗——那边已有「备份写盘窗
+        #   只记账不判红」的配合（2026-11-18 凌晨 03:20 实弹：1.6GB/h 连红 3 轮）。
+        _rc=0
+        tar -czf "$DEST/dist-full-${STAMP}.tar.gz" --warning=no-file-changed -C "$DIST" state.json secret results || _rc=$?
+        if [ "$_rc" -ge 2 ] || [ ! -s "$DEST/dist-full-${STAMP}.tar.gz" ]; then
+            rm -f "$DEST/dist-full-${STAMP}.tar.gz"
+            echo "跑分明细快照失败（tar 退出码 ${_rc}）——半成品已删，明细本周裸奔" >&2
+            exit 1
+        fi
         chmod 600 "$DEST"/dist-full-*.tar.gz
         ls -1t "$DEST"/dist-full-*.tar.gz | tail -n +9 | xargs -r rm -f
         echo "跑分明细快照完成：$(basename "$(ls -1t "$DEST"/dist-full-*.tar.gz | head -1)")，现有 $(ls -1 "$DEST"/dist-full-*.tar.gz | wc -l | tr -d ' ') 份"

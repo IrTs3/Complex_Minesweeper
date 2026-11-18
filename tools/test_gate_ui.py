@@ -5277,6 +5277,13 @@ console.log(JSON.stringify(out));
         and "results" not in _meta68[0] and "results" in _full68[0]
         and 'DIST=/var/lib/cmsdist' in bak68,
         f"meta={_meta68} full={_full68}")
+    # 2026-11-18 凌晨实弹：周三全量打包时机队恰好交结果 → tar「file changed as we
+    # read it」退出 1，半成品被删、当周明细裸奔。dist-full 必须容忍边读边变（results
+    # 追加式，读到的都是完整时点快照），只把 ≥2 的真错误当失败。
+    chk("T68 ★ dist-full 容忍边读边变：--warning=no-file-changed + 退出码 0/1 均扶正、≥2 才删半成品",
+        "--warning=no-file-changed" in bak68
+        and "tar -czf \"$DEST/dist-full-${STAMP}.tar.gz\" --warning=no-file-changed -C \"$DIST\" state.json secret results || _rc=$?"
+        in bak68 and '[ "$_rc" -ge 2 ]' in bak68)
     # 同一段逻辑（服务器脚本不许静默失效）下的另一条：探活的失败通道。
     # hc_url 只打印 $BASE、ping_fail 也调它，**没有任何一处拼 /fail** —— 于是每次
     # 探活失败都发出去一个成功 ping，把 Healthchecks 刷回 UP。11-02 cmsdist 坏档
