@@ -847,7 +847,9 @@ class Handler(BaseHTTPRequestHandler):
         except (TypeError, ValueError):
             bad = False
         if bad:
-            self.log_error('"%s" %s %s', self.requestline, str(code), str(size))
+            # requestline 截到 200：URI 可达 ~8KB，匿名刷 403 时每条原样落 journal
+            # 等于给攻击者一个远程灌盘把手（journald 限速只限条数不限字节）。
+            self.log_error('"%s" %s %s', self.requestline[:200], str(code), str(size))
 
     def log_error(self, fmt, *args):
         sys.stderr.write("%s - %s\n" % (self.client_address[0], fmt % args))

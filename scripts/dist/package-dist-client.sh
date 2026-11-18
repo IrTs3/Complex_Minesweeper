@@ -60,14 +60,15 @@ SOLVER_VER=$({ shasum -a 256 "$HERE/tools/solver.cpp" "$HERE/src/core/Board.cpp"
 # AGPL-3.0 源码指引（许可证合规）：包里的 solver-expert* 二进制按 AGPL-3.0 分发，
 # 须「随附源码或书面说明获取途径」——用「公开仓库 + 本文件」履行该义务。
 SRC_REV=$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo unknown)
+SRC_DATE=$(git -C "$HERE" log -1 --format=%cs 2>/dev/null || echo unknown)
 mkdir -p "$OUT"
 cat > "$OUT/SOURCES.txt" <<EOF
 本分发包内的 solver-expert（macOS 包内嵌 / solver-expert.exe / solver-expert-linux）
 按 GNU Affero General Public License v3.0（AGPL-3.0）授权分发，不附带任何担保。
 
 对应源码（SolverEngine.h、NNForward.h、tools/solver.cpp 及其依赖）：
-  https://github.com/IrTs3/Complex_Minesweeper
-打包时源码提交：$SRC_REV    solver 指纹：$SOLVER_VER
+  https://github.com/IrTs3/Complex_Minesweeper  main 分支（squash 快照仓，打包时点 ${SRC_DATE}）
+打包时开发提交：$SRC_REV    solver 指纹：$SOLVER_VER
 许可证全文见该仓库 src/solver/LICENSE。
 EOF
 
