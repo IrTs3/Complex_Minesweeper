@@ -5380,6 +5380,63 @@ console.log(JSON.stringify(out));
         except Exception as e:
             skip("T96 幻影回归功能账", f"跑 dist_server 失败：{e}")
 
+    # ── T97：外审 F-01 —— 异常 Host 掐死 + 跳转域名不可控（TY0712-BB-20261119）──
+    # 修复三件套，缺一件就是 F-01 复发或部署炸：
+    #   · 块二 absolute_redirect off（相对 Location，域名不进跳转）；
+    #   · $cms_host_ok 白名单 map + 块二 if return 444（白名单外直接掐连接）；
+    #   · 443 开关片段生成 SNI 拒绝块占 default_server（证书不在则空文件，
+    #     与 443 开关同一颗保险丝）。
+    # 白名单必须含回环两侧 Host：8080 隧道/探活第 4、6 项/部署自测全打它们，
+    # 漏一个 = 监控与自测当场全线误红 —— 所以这里把每个条目单独钉死。
+    print("\nT97 外审 F-01 回归：Host 白名单 + 相对跳转 + SNI 拒绝块")
+    dw97 = root / "scripts" / "web" / "deploy-web.sh"
+    if not dw97.exists():
+        skip("T97 F-01 回归", "找不到 deploy-web.sh")
+    else:
+        dw97s = dw97.read_text(encoding="utf-8")
+        _m97 = dw97s.splitlines()
+        _a97 = next((i for i, _l in enumerate(_m97) if "<<'NGINX'" in _l), 0)
+        _b97 = next((i for i in range(_a97 + 1, len(_m97)) if _m97[i].strip() == "NGINX"), _a97)
+        _main97 = "\n".join(ln for ln in _m97[_a97 + 1:_b97]
+                            if not ln.strip().startswith("#"))
+        _map97 = re.search(r"map \$host \$cms_host_ok \{(.*?)\}", _main97, re.S)
+        chk("T97 ★ 块二 absolute_redirect off（默认 on 会把 $host 垫进 Location，域名重回可控）",
+            "absolute_redirect off;" in _main97,
+            "跳转还是绝对地址 = 外审 F-01 的反射行为原样在线上")
+        chk("T97 ★ $cms_host_ok 白名单 map 存在且默认拒绝",
+            _map97 is not None and re.search(r"\bdefault\s+0;", _map97.group(1)) is not None,
+            "map 缺失 = 块二的 if 引用未定义变量，nginx -t 直接失败")
+        chk("T97 ★ 白名单含回环全部形态（探活/自测/隧道都打它们，漏一个全线误红）",
+            _map97 is not None
+            and all(x in _map97.group(1)
+                    for x in ("@@DOMAIN@@", "www.@@DOMAIN@@", "localhost",
+                              "127.0.0.1", "::1", "\"[::1]\"")),
+            "127.0.0.1:8080 的探活被 444 掐掉 = 死人开关天天响")
+        chk("T97 ★ 块二白名单外 return 444（server 级 rewrite 阶段，先于一切 location）",
+            "if ($cms_host_ok = 0) { return 444; }" in _main97,
+            "只发相对跳转不掐连接 = 异常 Host 仍能拿 /learn/ 页面（报告 §3.1 第三行）")
+        chk("T97 ★ 拒绝块进站点文件，占 443 default_server（块二不再隐式兜底）",
+            "include /etc/nginx/snippets/cms-https-reject.conf;" in _main97
+            and "server_name cms-sni-reject.invalid;" in dw97s
+            and re.search(r"server \{\s*\n\s*listen 443 ssl http2 default_server;", dw97s)
+            and "return 444;" in dw97s,
+            "listen 裸在片段顶层（没包 server{}）= include 到 http 上下文直接 nginx -t 爆炸；"
+            "443 的 default_server 还在业务块 = 任意 SNI 都能落进来拿页面")
+        chk("T97 ★ 拒绝块走同一颗 443 保险丝：证书不在时空文件（nginx 配置永远语法完整）",
+            ': > "$REJ"' in dw97s and 'chmod 644 "$SNIP" "$REJ"' in dw97s,
+            "证书丢失分支漏改 = nginx -t 因缺 cert 失败，把整站拖进回滚")
+        chk("T97 ★ 拒绝块 server_name 不许用 _ 通配（T58 口径：兜底靠 default_server 明说）",
+            "server_name _;" not in dw97s,
+            "通配名与 default_server 谁赢取决于匹配顺序，属隐式行为")
+        chk("T97 ★ 部署自测真打异常 Host 并要求连接被掐（curl 非 0 退出，http_code=000）",
+            "-H 'Host: cms-audit-f01.invalid'" in dw97s
+            and "if [ \\\"\\$f01code\\\" != '000' ]" in dw97s
+            and "-H 'X-Forwarded-Host: cms-audit-f01.invalid'" in dw97s,
+            "只测配置文本不测行为 = 报告 §3.5 验收要求的『以同样请求复测』没做")
+        chk("T97 ★ 自测 Location 断言不认绝对地址（含 :// 即红，absolute_redirect 被覆盖也能抓到）",
+            "case \\\"\\$f01loc\\\" in" in dw97s and "*'://'*)" in dw97s,
+            "跳转域名反射没有行为级断言 = 下次有人改回绝对跳转静默复发")
+
     # ── T68：backup.sh 的 QQbot 段已入库，别再被"清理 bot 痕迹"抹掉 ──────
     # 2026-10-28 那条「QQbot 不进仓库」的裁决，实际后果是仓库副本比服务器少一截，
     # 而 deploy-backup.sh 是**整文件 scp 覆盖**——谁跑一次部署，bot 两路快照就静默没了。

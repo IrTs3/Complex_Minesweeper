@@ -347,6 +347,29 @@ map $scheme $cms_hsts {
     default "";
 }
 
+# F-01（2026-11-19 外审 TY0712-BB-20261119）：HTTPS 曾接受任意 Host 并把它拼进跳转
+# Location（absolute_redirect 默认把相对 Location 前面垫上 $host）。修法两半：
+#   · 块二 absolute_redirect off —— 发相对 Location（RFC 7231 合法），域名不再可控；
+#   · $cms_host_ok 白名单 + return 444 —— 白名单外的 Host 直接掐连接，
+#     /learn/ 这种「异常 Host 也能拿到页面」的口子一并堵死。
+# 白名单必须包含回环两侧的 Host（localhost / 127.0.0.1 / ::1）：8080 隧道、探活
+# 第 4/6 项、部署自测全打它们，漏一个 = 监控和自测当场全线误红。
+# IPv6 字面量带不带方括号两种形态都列上（$host 对方括号的处理随 Host 写法而变）。
+map $host $cms_host_ok {
+    default        0;
+    @@DOMAIN@@     1;
+    www.@@DOMAIN@@ 1;
+    localhost      1;
+    127.0.0.1      1;
+    ::1            1;
+    "[::1]"        1;
+}
+
+# SNI 拒绝块由 443 开关片段生成（cms-https-reject.conf）：占住 443 的 default_server，
+# SNI 对不上域名的连接在 TLS 握手后第一字节就被掐（return 444），块二不再隐式兜底。
+# 证书不在时片段为空文件 —— 与 443 开关同一颗保险丝，nginx 配置永远语法完整。
+include /etc/nginx/snippets/cms-https-reject.conf;
+
 server {
     # ==================== 块一：80 明文只负责把人送到 443 ====================
 
@@ -460,6 +483,16 @@ server {
 
     # 不回显 nginx 版本号（默认会带 nginx/1.24.0 (Ubuntu)，等于给扫描器报版本）
     server_tokens off;
+
+    # F-01（2026-11-19 外审）：跳转一律发相对 Location。默认 absolute_redirect on 会把
+    # $host 垫到相对 Location 前面 —— Host 是客户端可控的，等于把「跳去哪」交给来的人。
+    # 相对 Location 浏览器照发同域，所有部署自测与探活的 Location 断言不受影响。
+    absolute_redirect off;
+
+    # 同一笔外审的另一半：Host 白名单外的请求直接掐连接（444 = 无响应关闭）。
+    # if + return 是 nginx 文档点名的合法用法（server 级 rewrite 阶段，先于一切 location）；
+    # 这里的 if 不做内容改写、不嵌 location，不踩「if is evil」的坑。
+    if ($cms_host_ok = 0) { return 444; }
 
     # log_not_found off（实测 2026-11-16）：try_files 打不到文件时不往 **error_log** 写
     # open() 失败行——那些行带完整 URI（T61 的教训），是扫描器洪水最吵的部分。
@@ -944,6 +977,7 @@ SSL_KEY=${SSL_DIR}/${DOMAIN}.key
 $SSH "$SERVER" "CMS_PEM='${SSL_PEM}' CMS_KEY='${SSL_KEY}' bash -s" <<'HTTPSLISTEN'
 set -e
 SNIP=/etc/nginx/snippets/cms-https-listen.conf
+REJ=/etc/nginx/snippets/cms-https-reject.conf
 # 挑战目录：acme.sh 的 webroot 就是这个，nginx 里的 root 也指它，两处必须同名。
 install -d -m 755 -o www-data -g www-data /var/www/acme/.well-known/acme-challenge
 if [ -f "$CMS_PEM" ] && [ -f "$CMS_KEY" ]; then
@@ -961,13 +995,33 @@ ssl_session_timeout 1d;
 ssl_session_tickets off;
 SNIP_BODY
     echo "  ✓ 证书就位，443 监听已开：$(openssl x509 -noout -enddate -in "$CMS_PEM" 2>/dev/null || echo '（读不到到期日）')"
+    # F-01（2026-11-19 外审）的另一半：443 的 default_server 换成 SNI 拒绝块。
+    # 此前块二靠「没别人占 443」隐式兜底，任何 SNI/Host 都能落进来拿页面；
+    # 现在证书对不上域名的连接在这里握手后第一字节就被掐（444），站点块只服务白名单 Host。
+    # server_name 不能写 _（部署自测与 T58 都禁止该通配）；反正是 default_server，
+    # 起个哨兵名只为语法合法，匹配永远走 default 兜底路径。
+    cat > "$REJ" <<REJ_BODY
+# 由 scripts/web/deploy-web.sh 每次部署按证书在不在重新生成 —— 手改会被覆盖。
+# 443 的 default_server：SNI 对不上 ty0712.com 的连接在此直接断开（return 444）。
+server {
+    listen 443 ssl http2 default_server;
+    listen [::]:443 ssl http2 default_server;
+    server_name cms-sni-reject.invalid;
+    ssl_certificate $CMS_PEM;
+    ssl_certificate_key $CMS_KEY;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    return 444;
+}
+REJ_BODY
+    echo "  ✓ SNI 拒绝块就位：443 default_server 不再回业务页"
 else
     : > "$SNIP"
+    : > "$REJ"
     echo "  证书不在（${CMS_PEM}），开关留空：443 无人监听"
     echo "  ⚠ 明文收口之后这不是「退回明文能用」：80 那块只做跳转，443 没人听 = 域名整站打不开"
     echo "  签证书：bash scripts/web/deploy-https.sh（80 上的挑战路径已放开，续期也走它）"
 fi
-chmod 644 "$SNIP"
+chmod 644 "$SNIP" "$REJ"
 HTTPSLISTEN
 
 # 4) 启用、语法检查、重载、防火墙
@@ -1317,6 +1371,37 @@ $SSH "$SERVER" "
             echo '    ✗ 明文响应也发了 HSTS —— \$cms_hsts 那个 map 没生效（八成写成了字面量）' >&2
             exit 1
         fi
+
+        # —— F-01（2026-11-19 外审 TY0712-BB-20261119）：异常 Host 掐死 + 跳转域名不可控 ——
+        # 负向：Host 白名单外的请求必须拿不到任何响应（return 444 = 连接无响应关闭，
+        # curl 退出码非 0 且 http_code 为 000）。若这里拿到 200/302，就是块二的
+        # 白名单 if 断了 —— 与报告 §3.5 验收「异常 Host 不再以异常域名获得跳转或页面」对应。
+        f01code=\$(curl -s --noproxy '*' --http1.1 -m 8 --resolve ${DOMAIN}:443:127.0.0.1 \
+            -H 'Host: cms-audit-f01.invalid' -o /dev/null -w '%{http_code}' \
+            \"https://${DOMAIN}/\" 2>/dev/null) || true
+        printf '    %-32s %s\n' '443 异常 Host 的响应码' \"\${f01code:-无}\"
+        if [ \"\$f01code\" != '000' ]; then
+            echo '    ✗ 异常 Host 没被掐死（响应非 000）—— F-01 复发：查 cms_host_ok map 与块二的 444 if' >&2
+            exit 1
+        fi
+        # 正向：正常 Host 的首页跳转必须是相对 Location（不带 ://）——
+        # absolute_redirect off 没写或被覆盖时，Location 会带上客户端给的域名，重回可控状态。
+        f01loc=\$(curl -s -D- -o /dev/null --resolve ${DOMAIN}:443:127.0.0.1 \"https://${DOMAIN}/\" | grep -i '^location:' | tr -d '\\r')
+        printf '    %-32s %s\n' '443 正常跳转 Location' \"\${f01loc:-（没有跳转）}\"
+        case \"\$f01loc\" in
+            *'://'*)
+                echo \"    ✗ 跳转 Location 还是绝对地址（\${f01loc}）—— absolute_redirect off 没生效，Host 又可控了\" >&2
+                exit 1;;
+        esac
+        # 代理头不许影响跳转域名（报告 §3.5 验收）：X-Forwarded-Host 是客户端可造的。
+        f01xfh=\$(curl -s -D- -o /dev/null --resolve ${DOMAIN}:443:127.0.0.1 \
+            -H 'X-Forwarded-Host: cms-audit-f01.invalid' \"https://${DOMAIN}/\" | grep -i '^location:' | tr -d '\\r')
+        case \"\$f01xfh\" in
+            *'://'*)
+                echo \"    ✗ X-Forwarded-Host 影响了跳转域名（\${f01xfh}）—— 代理头被算进 host 了\" >&2
+                exit 1;;
+        esac
+        echo '    ✓ F-01 已堵：异常 Host 连接被掐，跳转 Location 为相对路径且不受代理头影响'
 
         # 443 上的挑战路径也必须取得到文件：80 现在除了这条一律 302，LE 跟随跳转后落在 443。
         # 缺了它平时毫无症状，90 天后证书到期才表现为「全站打不开」，所以当场造探针。
