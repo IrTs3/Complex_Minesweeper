@@ -68,6 +68,7 @@ REMOTE_DIR="/srv/complexminesweeper"
 PORT="${PORT:-8080}"               # 只绑回环的内测端口（与 SSH 端口无关；对外入口是 443）
 DOMAIN="${DOMAIN:-ty0712.com}"     # 已备案域名：80 接管 default_server 后统一 302 到 https
 WEB_DIR="web"
+ZIP_DIR="${ZIP_DIR:-$HOME/zip}"    # 可否认加密网页版的源（仓库外 ~/zip/webapp，公开挂 /zip/）
 
 # 字符白名单（2026-11-13 审计 [低]，与 deploy-https.sh 同纪律）：这些值不加引号地内插进
 # 远端 root shell 与 nginx 配置——放行引号/反引号/$/空白等于 root 远端任意命令。
@@ -173,6 +174,41 @@ grep -q 'LEARN_VER' "$WEB_DIR/learn/app.js" \
     || { echo "  ✗ app.js 不消费 LEARN_VER —— 重部署后 pages/*.js 会被 immutable 钉死旧版" >&2; exit 1; }
 echo "  ✓ 学习站入口 + manifest 注入均带 v=${LEARN_VER}"
 
+# 1d) zip 本地网页版缓存击穿（~/zip/webapp，公开路径 /zip/，纯前端本地加密）：
+#     与 learn 同一套取舍——内容 sha 版本号 + immutable 长缓存 + 入口 no-cache。
+#     zip-core.js 不在 index.html 引用里，而是 app.js 的 ESM import 说明符，
+#     必须单独挂 ?v=（否则 immutable 把旧 zip-core.js 钉死一个月，同 dist 子模块教训）。
+ZIP_VER="$(find "$ZIP_DIR/webapp" -type f ! -name '.DS_Store' | sort | xargs shasum | shasum | cut -c1-8)"
+if [ ! -f "$ZIP_DIR/webapp/index.html" ] || [ ! -f "$ZIP_DIR/webapp/zip-core.js" ] \
+   || [ ! -f "$ZIP_DIR/webapp/vendor/argon2.umd.min.js" ]; then
+    echo "  ✗ $ZIP_DIR/webapp 缺核心文件（index.html / zip-core.js / vendor/argon2.umd.min.js）" >&2
+    exit 1
+fi
+echo "==> zip 网页版缓存击穿：v=${ZIP_VER}"
+cp -R "$ZIP_DIR/webapp" "$STAGE/zip"
+find "$STAGE/zip" -name '.DS_Store' -delete
+sed -i.bak -E "s#((src|href)=\"[A-Za-z0-9_./-]+\.(css|js|png))\"#\1?v=${ZIP_VER}\"#g" "$STAGE/zip/index.html"
+rm -f "$STAGE/zip/index.html.bak"
+sed -i.bak -E "s#(\./zip-core\.js)\"#\1?v=${ZIP_VER}\"#" "$STAGE/zip/app.js"
+rm -f "$STAGE/zip/app.js.bak"
+grep -q "app\.js?v=${ZIP_VER}" "$STAGE/zip/index.html" \
+    || { echo "  ✗ zip/index.html 未挂版本号，缓存击穿失败" >&2; exit 1; }
+grep -q "vendor/argon2\.umd\.min\.js?v=${ZIP_VER}" "$STAGE/zip/index.html" \
+    || { echo "  ✗ zip/index.html 的 vendor 脚本未挂版本号" >&2; exit 1; }
+grep -q "zip-core\.js?v=${ZIP_VER}" "$STAGE/zip/app.js" \
+    || { echo "  ✗ zip/app.js 的 zip-core import 未挂版本号 —— immutable 会钉死旧实现" >&2; exit 1; }
+grep -q '?v=' "$ZIP_DIR/webapp/index.html" "$ZIP_DIR/webapp/app.js" \
+    && { echo "  ✗ 源码树 zip/webapp 里出现了 ?v= —— 版本号只许活在 \$STAGE" >&2; exit 1; }
+echo "  ✓ zip 入口 + zip-core import 均带 v=${ZIP_VER}"
+
+# vendor 供应链锚：本地 vendor 文件哈希必须出现在 SHA256SUMS 清单里，
+# 部署自测再验「线上下发的文件 == 这个锚」，防线上文件被替换后静默通过。
+ZIP_VSHA="$(shasum -a 256 "$ZIP_DIR/webapp/vendor/argon2.umd.min.js" | awk '{print $1}')"
+if ! grep -q "$ZIP_VSHA" "$ZIP_DIR/webapp/vendor/SHA256SUMS"; then
+    echo "  ✗ vendor/argon2.umd.min.js 哈希不在 SHA256SUMS 清单里 —— vendor 被换过？重新核官方源" >&2
+    exit 1
+fi
+
 # 2) 建目录并同步文件
 #    index.html、dist 与 learn 从改写副本 $STAGE 同步（带版本号）；style.css/assets/gate 用原始文件。
 echo "==> 同步文件"
@@ -186,6 +222,7 @@ rsync -az --delete --delete-excluded --exclude='*.map' --exclude='*.d.ts' --excl
     -e "ssh -p ${SSH_PORT} -o BatchMode=yes -o ConnectTimeout=10" \
     "$STAGE/index.html" "$WEB_DIR/style.css" "$STAGE/dist" "$WEB_DIR/assets" "$WEB_DIR/gate" \
     "$STAGE/learn" \
+    "$STAGE/zip" \
     "$SERVER:$REMOTE_DIR/"
 
 # 3) 远端 nginx 配置（独立 server block + 两个 snippet，不碰默认站点）
@@ -598,6 +635,34 @@ server {
     }
     location ^~ /learn/ {
         location = /learn/index.html {
+            add_header Cache-Control "no-cache" always;
+            include /etc/nginx/snippets/cms-security-headers.conf;
+            try_files $uri =404;
+        }
+        add_header Cache-Control "public, max-age=2592000, immutable" always;
+        include /etc/nginx/snippets/cms-security-headers.conf;
+        try_files $uri $uri/ =404;
+    }
+
+    # 公开：zip 可否认加密网页版（纯前端本地加密，服务器只当静态文件分发，完全公开）。
+    # 与 /learn/ 同一套缓存模型：^~ 压过受保护正则（app.js / vendor/*.js 都是 .js 后缀，
+    # 不加 ^~ 会掉进下面的 auth_request 正则块对未登录者 404）；入口 no-cache + 静态
+    # immutable 长缓存，击穿靠 deploy 的 ZIP_VER 内容哈希。try_files 绝不回退 /index.html。
+    location = /zip {
+        include /etc/nginx/snippets/cms-ratelimit-loc.conf;
+        error_page 404 = @cms_zip_slash;
+        try_files /nonexistent =404;
+    }
+    location @cms_zip_slash {
+        return 302 /zip/;
+    }
+    location = /zip/ {
+        add_header Cache-Control "no-cache" always;
+        include /etc/nginx/snippets/cms-security-headers.conf;
+        try_files $uri $uri/ =404;
+    }
+    location ^~ /zip/ {
+        location = /zip/index.html {
             add_header Cache-Control "no-cache" always;
             include /etc/nginx/snippets/cms-security-headers.conf;
             try_files $uri =404;
@@ -1319,6 +1384,54 @@ $SSH "$SERVER" "
     fi
     echo '    ✓ 学习站公开可达且不含游戏 DOM'
 
+    # —— zip 网页版必须公开可达（完全公开的本地加密工具，未登录也要 200）——
+    # /zip/vendor/argon2.umd.min.js 专门验：带 .js 后缀，若「^~ /zip/」没压过受保护
+    # 正则就会 404。/zip 与 /zip/ 纠正到带斜杠入口。
+    for p in /zip/ /zip/app.js /zip/zip-core.js /zip/vendor/argon2.umd.min.js; do
+        code=\$(curl -s -o /dev/null -w '%{http_code}' http://localhost:${PORT}\$p)
+        printf '    %-40s HTTP %s\n' \"\$p (未登录)\" \"\$code\"
+        if [ \"\$code\" != '200' ]; then
+            echo \"    ✗ zip 网页版 \$p 未登录返回 \${code}（应为 200）—— 检查 ^~ /zip/\" >&2
+            exit 1
+        fi
+    done
+    zcode=\$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' http://localhost:${PORT}/zip)
+    case \"\$zcode\" in
+      302*/zip/) echo '    ✓ /zip 纠正到 /zip/（302）' ;;
+      *) echo \"    ✗ /zip 应 302 到 /zip/，实际：\$zcode\" >&2; exit 1 ;;
+    esac
+    zipbody=\$(curl -s http://localhost:${PORT}/zip/)
+    if printf '%s' \"\$zipbody\" | grep -q 'canvas id=\"board\"'; then
+        echo '    ✗ /zip/ 里混进了游戏 DOM（try_files 回退到 /index.html 了？）' >&2
+        exit 1
+    fi
+    if ! printf '%s' \"\$zipbody\" | grep -q 'zip 可否认加密'; then
+        echo '    ✗ /zip/ 正文不像 zip 网页版首页 —— 静态文件没同步到位？' >&2
+        exit 1
+    fi
+    zvsha=\$(curl -s http://localhost:${PORT}/zip/vendor/argon2.umd.min.js | sha256sum | cut -d' ' -f1)
+    if [ \"\$zvsha\" != '${ZIP_VSHA}' ]; then
+        echo \"    ✗ 线上 vendor/argon2.umd.min.js 哈希 \$zvsha 与 SHA256SUMS 锚 ${ZIP_VSHA} 不符 —— 供应链锚失配\" >&2
+        exit 1
+    fi
+    echo '    ✓ zip 网页版公开可达且不含游戏 DOM（vendor argon2 哈希与 SHA256SUMS 锚一致）'
+
+    # —— zip 网页版缓存头：与学习站同一套不变量 ——
+    echo '  zip 网页版缓存头检查:'
+    zcc=\$(tcurl http://localhost:${PORT}/zip/app.js -I | grep -i '^cache-control:' | tr -d '\\r' || true)
+    printf '    %-40s %s\n' '/zip/app.js（未登录）' \"\${zcc:-（无 Cache-Control）}\"
+    case \"\$zcc\" in
+      *immutable*) : ;;
+      *) echo \"    ✗ /zip/app.js 缺 immutable —— 静态资源白耗回源带宽（nginx /zip/ location 没换上？）\" >&2; exit 1 ;;
+    esac
+    zicc=\$(tcurl http://localhost:${PORT}/zip/ -I | grep -i '^cache-control:' | tr -d '\\r' || true)
+    printf '    %-40s %s\n' '/zip/ 入口（未登录）' \"\${zicc:-（无 Cache-Control）}\"
+    case \"\$zicc\" in
+      *no-cache*) : ;;
+      *) echo \"    ✗ /zip/ 入口必须 no-cache —— immutable 会让重部署后的新版本永远到不了浏览器\" >&2; exit 1 ;;
+    esac
+    echo '    ✓ zip 网页版：静态 immutable + 入口 no-cache'
+
     # —— 学习站缓存头：静态资源 immutable 长缓存（省回源），入口必须 no-cache ——
     # 与上面「受保护资源不许缓存」是同一条铁律的两面：公开面靠 ?v= 击穿 + 长缓存省带宽；
     # 入口一旦 immutable，重部署后浏览器永远拿不到新 HTML，?v= 就永远传不下去。
@@ -1356,7 +1469,7 @@ $SSH "$SERVER" "
     fi
 
     echo '  安全头检查（入口公开路径 / 受保护路径 都要有 CSP）:'
-    for p in /gate/\$TOK/gate.css /dist/main.js; do
+    for p in /gate/\$TOK/gate.css /dist/main.js /zip/; do
         n=\$(tcurl \"http://localhost:${PORT}\$p\" -I | grep -ci 'content-security-policy')
         printf '    %-32s CSP 头 %s 个\n' \"\${p//\$TOK/<TOKEN>}\" \"\$n\"
         if [ \"\$n\" -lt 1 ]; then
@@ -1455,10 +1568,13 @@ for f in index.html style.css dist/main.js dist/game.js dist/renderer.js \
          gate/index.html gate/gate.css gate/gate.js \
          assets/bg.webp assets/ibmplex-ascii.woff2 assets/bg.jpg assets/IBMPlexSerif-Regular.ttf \
          learn/index.html learn/style.css learn/manifest.js \
-         learn/highlight.js learn/search.js learn/app.js; do
+         learn/highlight.js learn/search.js learn/app.js \
+         zip/index.html zip/app.js zip/zip-core.js zip/vendor/argon2.umd.min.js zip/vendor/LICENSE; do
     case "$f" in
         index.html|dist/*) LP="$STAGE/$f" ;;
         learn/index.html|learn/manifest.js) LP="$STAGE/$f" ;;
+        zip/index.html|zip/app.js) LP="$STAGE/$f" ;;
+        zip/*)                     LP="$ZIP_DIR/webapp/${f#zip/}" ;;
         *)                 LP="$WEB_DIR/$f" ;;
     esac
     L=$(shasum -a 256 "$LP" | cut -c1-16)

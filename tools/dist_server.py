@@ -479,21 +479,28 @@ def _dup(st, seed: int, model: str, cols: int, rows: int, mines: int) -> bool:
     return False
 
 
+def _lease_limit(t, lease):
+    """租约上限（秒）：上报过进度的按 lease 量「失联多久」，不是「总共跑了多久」；
+    从未上报过进度的按 HEARTBEAT_GRACE_SEC 宽限收，空转满 HEARTBEAT_MISS_CAP 次
+    仍无心跳的退回整份租约（老客户端不发进度，别把它们打进重发循环）。
+    sweep_expired 与 _inprog_view（只读视图）共用这一份口径，别各写一份。"""
+    if "prog_at" not in t and t.get("nh", 0) < HEARTBEAT_MISS_CAP:
+        return min(lease, HEARTBEAT_GRACE_SEC)
+    return lease
+
+
 def sweep_expired(st, now=None):
     """lease 超时的 in-progress 任务重回队列（经典任务耗时长，阈值由 admin-lease 调）。
     存活时钟 = max(领取时刻, 最近进度上报时刻)：新客户端每 10s 报一次进度，
-    只要还活着就永不被收走；lease 量的是「失联多久」，不是「总共跑了多久」。
-    从未上报过进度的按 HEARTBEAT_GRACE_SEC 宽限收；空转满 HEARTBEAT_MISS_CAP 次
-    仍无心跳的退回整份租约（老客户端不发进度，别把它们打进重发循环）。"""
+    只要还活着就永不被收走。**只在写锁路径调用**（claim/release/result）——
+    只读视图里跑它就是 2026-11-19 的幻影队列事故：内存里扫回队列打新戳、
+    打印出来，磁盘从未变，下一次查询又从旧盘态重来，倒计时永远钉在初值。"""
     now = now or time.time()
     lease = st["config"].get("lease_sec", DEFAULT_LEASE_SEC)
     back = []
     for tid, t in st["inprog"].items():
         age = now - max(t["claimed_at"], t.get("prog_at", 0))
-        limit = lease
-        if "prog_at" not in t and t.get("nh", 0) < HEARTBEAT_MISS_CAP:
-            limit = min(limit, HEARTBEAT_GRACE_SEC)
-        if age > limit:
+        if age > _lease_limit(t, lease):
             back.append(tid)
     for tid in back:
         t = st["inprog"].pop(tid)
@@ -860,9 +867,9 @@ class Handler(BaseHTTPRequestHandler):
                 # ★ 只读锁：这条是每 2 分钟一次的存活探针，拿可写锁等于为了回答
                 #   "你还活着吗" 把整份状态重新序列化+落盘一遍（一天 ~720 次全量重写，
                 #   白烧这台 2 核机器的 CPU，还平白多出 720 次撞写竞态的机会）。
-                #   sweep 在这里只为把显示口径算准，不落盘；真正收租约由 /claim 那次写做。
+                #   只读锁 + 不 sweep：这里吐的是磁盘真账（过期租约仍算在 inprog 头上，
+                #   lease_expired 字段有标）；在只读路径代扫就是 11-19 的幻影队列事故。
                 with StateLock(readonly=True) as st:
-                    sweep_expired(st)
                     info = {"ok": True, "paused": st["config"].get("paused", False),
                             "queue": len(st["queue"]), "inprog": len(st["inprog"]),
                             "done": len(st["done"])}
@@ -1081,7 +1088,11 @@ def cmd_admin_pairmode(argv):
 
 
 def _inprog_view(st):
-    """admin-status / admin-lite 共用的「进行中」视图，别各写一份。"""
+    """admin-status / admin-lite 共用的「进行中」视图，别各写一份。
+    lease_expired 与 sweep 同口径：True = 租约已过期，下一个客户端领取时会被
+    真正收回重发；只读视图不代扫（幻影队列事故），过期态如实亮出来。"""
+    now = time.time()
+    lease = st["config"].get("lease_sec", DEFAULT_LEASE_SEC)
     return [{"task_id": k, "ip": v["ip"], "name": v["name"], "os": v.get("os", ""),
              "solver_ver": v.get("solver_ver", ""), "client_ver": v.get("client_ver", ""),
              "nn_ver": v.get("nn_ver", ""),
@@ -1089,7 +1100,9 @@ def _inprog_view(st):
              "cols": v["cols"], "rows": v["rows"], "mines": v["mines"],
              "games": v["games"],
              "prog": v.get("prog"),
-             "claimed_min_ago": round((time.time() - v["claimed_at"]) / 60, 1)}
+             "claimed_min_ago": round((now - v["claimed_at"]) / 60, 1),
+             "lease_expired": now - max(v["claimed_at"], v.get("prog_at", 0))
+                              > _lease_limit(v, lease)}
             for k, v in st["inprog"].items()]
 
 
@@ -1134,7 +1147,6 @@ def cmd_admin_lite(argv):
     if argv and str(argv[0]).isdigit():
         n = max(1, min(500, int(argv[0])))
     with StateLock(readonly=True) as st:
-        sweep_expired(st)
         recent = sorted(st["done"].items(),
                         key=lambda kv: kv[1].get("time", 0), reverse=True)[:n]
         out = {"config": st["config"], "queue": st["queue"], "inprog": _inprog_view(st),
@@ -1149,7 +1161,6 @@ def cmd_admin_history(_argv):
     """历史弹窗专用：全量 done，但只投影 UI 要用的字段（约省一半）。
     筛选/排序/分页都在浏览器里做，所以这里给的是全集，不分页。"""
     with StateLock(readonly=True) as st:
-        sweep_expired(st)
         out = {"done": {k: _done_ui(v) for k, v in st["done"].items()},
                "done_total": len(st["done"])}
     print(json.dumps(out, ensure_ascii=False))
@@ -1157,7 +1168,6 @@ def cmd_admin_history(_argv):
 
 def cmd_admin_status(_argv):
     with StateLock(readonly=True) as st:  # 只读：root 跑也不改写 state.json 属主
-        sweep_expired(st)
         agg = {}
         for tid, r in st["done"].items():
             if not r.get("valid", True):

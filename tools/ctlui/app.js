@@ -344,7 +344,10 @@ function render(d) {
         ? `<td><code${voC ? ` class="ver-old" title="客户端不是这台机器该平台已发布的最新版（已发布 ${esc(pubC)}）"` : ""}>${esc(t.client_ver)}</code></td>`
         : '<td class="muted">—</td>') + p +
       lastCommCell(t) +
-      `<td class="num">${durFmt(t.claimed_min_ago)}</td></tr>`;
+      `<td class="num">${durFmt(t.claimed_min_ago)}` +
+      (t.lease_expired
+        ? `<br><span class="comm-late" title="租约已过期：舰队下一个客户端来领取时，服务器会自动把这单收回重发（打回收冷却）">租约过期</span>`
+        : "") + `</td></tr>`;
   };
   // 组复选框：勾上 = 整组任务进出 kickSel；组头行在整组选中时同样吃 picked 闪烁。
   // 复选框并进组头同一格（紧贴字段），与叶子行的「勾选框+任务号」同列起步

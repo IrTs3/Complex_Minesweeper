@@ -131,15 +131,19 @@ def cmd_status():
               f"歇 {_dur(ph.get('rest_sec'))}")
     # 两个身份一起报：更新是**逐文件**换的，「客户端换了、solver.exe 因为在用换不动」
     # 这种半更新只看求解器指纹完全隐形（Windows 上的常态）。老包两个字段都没有 = 未上报。
+    live = [t for t in st["inprog"] if not t.get("lease_expired")]
     pairs = {}
-    for t in st["inprog"]:
+    for t in live:
         k = (t.get("solver_ver") or "未上报", t.get("client_ver") or "未上报",
              t.get("nn_ver") or "")
         pairs[k] = pairs.get(k, 0) + 1
+    stale = len(st["inprog"]) - len(live)
+    tail = (f"（另有 {stale} 条租约过期的挂起任务，无人领取时不回收）" if stale and live
+            else f"（{stale} 条租约过期的挂起任务，无人领取时不回收）" if stale else "")
     print("线上在跑: " + ("、".join(f"求解器 {s} + 客户端 {c}"
                                   + (f" + 权重 {w}" if w else "") + f" ×{n} 终端"
                                   for (s, c, w), n in sorted(pairs.items(), key=lambda kv: -kv[1]))
-                       if pairs else "当前没有任务"))
+                       if pairs else "当前没有任务") + tail)
     print(f"优先队列: {len(st['queue'])}   进行中: {len(st['inprog'])}   完成: {len(st['done'])}")
     if st["queue"]:
         print("\n—— 优先队列（先发）——")
@@ -148,9 +152,13 @@ def cmd_status():
         if len(st["queue"]) > 10:
             print(f"  … 共 {len(st['queue'])} 个")
     if st["inprog"]:
-        print("\n—— 进行中 ——")
+        expired = sum(1 for t in st["inprog"] if t.get("lease_expired"))
+        print("\n—— 进行中 ——" + (f"（{expired} 条租约已过期，等下一个客户端领取时自动收回重发）"
+                                  if expired else ""))
         for t in st["inprog"]:
-            print(f"  {t['task_id']}  {t['model']}  {t['ip']:<15} {t['name'] or '-':<12} 已 {t['claimed_min_ago']}min")
+            mark = " ×过期" if t.get("lease_expired") else ""
+            print(f"  {t['task_id']}  {t['model']}  {t['ip']:<15} {t['name'] or '-':<12} "
+                  f"已 {t['claimed_min_ago']}min{mark}")
     agg = st["aggregate"]
     if agg:
         print("\n—— 合计（有效结果）——")

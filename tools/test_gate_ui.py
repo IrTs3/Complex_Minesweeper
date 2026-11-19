@@ -4652,8 +4652,8 @@ def run_tests(srv: Server, port: int, tok: str, state_dir: Path) -> None:
         and "rewrite 阶段就终止请求" in dw_src
         and "limit_conn_status 429;" in dw_src)
     chk("T62 ★ 全部 return 型 location 都 include 了 ratelimit-loc"
-        "（80 块 gate+兜底 ×2、landing 两模板各 ×3）",
-        dw_src.count("include /etc/nginx/snippets/cms-ratelimit-loc.conf;") == 8)
+        "（80 块 gate+兜底 ×2、landing 两模板各 ×3、/zip 纠正 ×1）",
+        dw_src.count("include /etc/nginx/snippets/cms-ratelimit-loc.conf;") == 9)
     chk("T62 ★ 自测带乱路径 429 防再犯闸（nf-selftest 连打）——缺它就是当初的假绿灯",
         "/nf-selftest-" in dw_src
         and "兜底 location 的 return 绕过了限速" in dw_src)
@@ -4701,6 +4701,64 @@ def run_tests(srv: Server, port: int, tok: str, state_dir: Path) -> None:
     chk("T63 ★ 校验和比对：learn/index.html 与 learn/manifest.js 比的是 $STAGE 改写副本"
         "（线上跑的就是改写版，比源码版永远不一致）",
         'learn/index.html|learn/manifest.js) LP="$STAGE/$f"' in dw_src)
+
+    # ── T95：zip 可否认加密网页版上线路径 /zip/（2026-11-19）────────────────
+    # 纯前端本地加密：服务器只当静态文件分发，密钥/明文永不上传；完全公开（未登录 200）。
+    # 缓存模型与 /learn/ 同一套：ZIP_VER 内容哈希 + immutable 长缓存 + 入口 no-cache。
+    # 特有点：zip-core.js 是 app.js 的 ESM import 说明符（不在 index.html 引用里），
+    # 必须单独挂 ?v=，否则 immutable 把旧实现钉死一个月（dist 子模块同一教训）。
+    zip_idx = Path.home() / "zip" / "webapp" / "index.html"
+    zip_app = Path.home() / "zip" / "webapp" / "app.js"
+    zip_core = Path.home() / "zip" / "webapp" / "zip-core.js"
+    vendor_sums = Path.home() / "zip" / "webapp" / "vendor" / "SHA256SUMS"
+    chk("T95 ★ 本机 zip/webapp 三件套 + vendor SHA256SUMS 齐备（缺一样部署就该拦）",
+        zip_idx.exists() and zip_app.exists() and zip_core.exists() and vendor_sums.exists())
+    chk("T95 ★ 部署脚本：ZIP_VER 来自 webapp 内容哈希（同 LEARN_VER 口径，内容不变 URL 不变）",
+        'ZIP_VER="$(find "$ZIP_DIR/webapp" -type f ! -name \'.DS_Store\' | sort | xargs shasum | shasum | cut -c1-8)"' in dw_src)
+    chk("T95 ★ 部署脚本：缺核心文件直接 exit 1（vendor/argon2.umd.min.js 是 CSP wasm 的前提）",
+        "缺核心文件" in dw_src and "vendor/argon2.umd.min.js" in dw_src)
+    chk("T95 ★ index.html 引用挂 ?v= + app.js 的 zip-core import 单独挂 ?v=（immutable 钉死教训）",
+        r's#((src|href)=\"[A-Za-z0-9_./-]+\.(css|js|png))\"#\1?v=${ZIP_VER}\"#g' in dw_src
+        and r"s#(\./zip-core\.js)\"#\1?v=${ZIP_VER}\"#" in dw_src
+        and 'grep -q "zip-core\\.js?v=${ZIP_VER}" "$STAGE/zip/app.js"' in dw_src)
+    chk("T95 ★ 源码树不许带 ?v=（版本号只活在 $STAGE）+ rsync 上传 $STAGE/zip",
+        'grep -q \'?v=\' "$ZIP_DIR/webapp/index.html" "$ZIP_DIR/webapp/app.js"' in dw_src
+        and '"$STAGE/zip" \\' in dw_src)
+    chk("T95 ★ nginx：/zip→/zip/ 302 纠正走 error_page 模式（return 绕过限速的教训）、"
+        "^~ /zip/ 压过受保护正则、入口与 index.html 双 no-cache、静态 immutable",
+        "location = /zip {" in dw_src
+        and "@cms_zip_slash" in dw_src
+        and "location = /zip/ {" in dw_src
+        and "location = /zip/index.html {" in dw_src
+        and dw_src.count('add_header Cache-Control "public, max-age=2592000, immutable" always;') == 2)
+    chk("T95 ★ 线上自测：zip 公开 200（vendor canary 防 ^~ 失效）+ /zip 302 + 缓存头实抓",
+        "/zip/vendor/argon2.umd.min.js" in dw_src
+        and "zip 网页版 \\$p 未登录返回" in dw_src
+        and "/zip/app.js 缺 immutable" in dw_src
+        and "/zip/ 入口必须 no-cache" in dw_src)
+    chk("T95 ★ 校验和比对纳入 zip 五个文件，源路径映射 $ZIP_DIR/webapp/（rsync 去掉 zip/ 前缀）",
+        "zip/index.html zip/app.js zip/zip-core.js zip/vendor/argon2.umd.min.js zip/vendor/LICENSE" in dw_src
+        and 'zip/*)                     LP="$ZIP_DIR/webapp/${f#zip/}"' in dw_src)
+    chk("T95 ★ vendor 供应链锚：部署前断言本地 vendor 哈希在 SHA256SUMS 清单里，"
+        "线上自测再验下发的 argon2.umd.min.js 与锚一致（缺锚=线上文件被换也绿灯）",
+        "vendor/argon2.umd.min.js 哈希不在 SHA256SUMS 清单里" in dw_src
+        and "SHA256SUMS 锚" in dw_src
+        and "zvsha" in dw_src)
+    _zip_idx_html = zip_idx.read_text(encoding="utf-8")
+    _zip_app_src = zip_app.read_text(encoding="utf-8")
+    _zip_scripts = re.findall(r"<script\b[^>]*>", _zip_idx_html)
+    chk("T95 ★ zip 网页版安全纪律：DOM 全走 textContent（无 innerHTML 赋值）、"
+        "script 全部外链 src（无内联代码，CSP script-src 'self' 才拦得住）、"
+        "无外部网络请求（fetch/XHR/sendBeacon 全无）",
+        zip_app.exists() and re.search(r"\.innerHTML\s*=", _zip_app_src) is None
+        and len(_zip_scripts) == 2
+        and all('src="' in s for s in _zip_scripts)
+        and not any(m in _zip_app_src
+                    for m in ("fetch(", "XMLHttpRequest", "navigator.sendBeacon")))
+    chk("T95 ★ wasm 落地前提：安全头 CSP 已含 'wasm-unsafe-eval'（hash-wasm 要编译 WASM），"
+        "且 vendor 带官方 SHA256SUMS（供应链可验）",
+        "'wasm-unsafe-eval'" in dw_src
+        and "argon2.umd.min.js" in vendor_sums.read_text(encoding="utf-8"))
     # 配置文本会骗人（改一行就绿），真实 socket 不会 —— 所以拿 ss 当判据。
     chk("T61 ★ 自测拿 `ss -ltn` 抓真实监听判「有没有非回环的 8080」，"
         "并另验回环上确实有（删掉监听的话探活第 4/6 项和这段自测的基准一起断）",
@@ -5242,6 +5300,85 @@ console.log(JSON.stringify(out));
                     "deploy-dist.sh" in cu7 and "未知命令" in cu7)
         except Exception as e:
             skip("T67 admin-lite 功能账", f"跑 dist_server 失败：{e}")
+
+    # ── T96：只读视图不许代扫过期租约（2026-11-19 幻影队列事故）────────────
+    # admin-status/lite/history、/ping 都拿只读锁；在只读路径跑 sweep_expired =
+    # 内存里把过期租约扫回队列打新戳、打印出去，磁盘从未变——下一次查询又从旧盘态
+    # 重来，ctlui 的「冷却剩余」永远钉在初值（实测：queued_at 比查询发出时刻还晚 1s
+    # =每次现场重扫的铁证）。只读视图必须如实显示，过期态由 _inprog_view 的
+    # lease_expired 字段标注；真回收只发生在写锁路径（claim/release）。
+    print("\nT96 只读视图幻影回归：readonly 路径无 sweep + 过期租约如实标注")
+    ds96 = HERE / "dist_server.py"
+    js96 = (HERE / "ctlui" / "app.js").read_text(encoding="utf-8")
+    src96 = ds96.read_text(encoding="utf-8")
+    chk("T96 ★ sweep_expired 只剩写锁路径两处调用（handle_claim/handle_release）",
+        len(re.findall(r"^\s*(?:moved = )?sweep_expired\(st\)$", src96, re.M)) == 2
+        and "handle_claim" in src96 and "handle_release" in src96,
+        "只读路径里再出现 sweep 调用 = 幻影队列复发")
+    chk("T96 _inprog_view 带 lease_expired 字段（与 sweep 同口径的过期标注）",
+        "_lease_limit" in src96 and "lease_expired" in src96
+        and src96.count("_lease_limit(") >= 2,
+        "只读视图看不到过期态 = 舰队离线时挂死任务不可见")
+    chk("T96 ctlui 进行中行渲染「租约过期」红标",
+        "lease_expired" in js96 and "租约过期" in js96,
+        "服务端标了前端不显示 = 等于没修")
+
+    if not ds96.exists():
+        skip("T96 幻影回归功能账", "找不到 dist_server.py")
+    else:
+        import hashlib
+        try:
+            with tempfile.TemporaryDirectory(prefix="cmsdist-t96-") as td96:
+                now96 = time.time()
+                st96 = {"config": {"default": {"model": "complex", "cols": 24, "rows": 16,
+                                               "mines": 72, "games": 50},
+                                   "seed_next": 20288274, "lease_sec": 900, "paused": False,
+                                   "cool_sec": 300, "max_ip_inprog": 3},
+                        "queue": [],
+                        "inprog": {
+                            # 过期：有进度上报但已沉默 3h+（lease 15min）
+                            "20288212-complex-24x16x72": {
+                                "task_id": "20288212-complex-24x16x72", "seed": 20288212,
+                                "model": "complex", "cols": 24, "rows": 16, "mines": 72,
+                                "games": 50, "nonce": "a" * 32, "ip": "203.0.113.9",
+                                "name": "anode01", "os": "Linux", "nh": 0,
+                                "claimed_at": now96 - 14000,
+                                "prog": {"done": 42, "eta_sec": 358, "at": now96 - 11500},
+                                "prog_at": now96 - 11500},
+                            # 新鲜：刚领 5 分钟，不得标过期
+                            "20288299-complex-24x16x72": {
+                                "task_id": "20288299-complex-24x16x72", "seed": 20288299,
+                                "model": "complex", "cols": 24, "rows": 16, "mines": 72,
+                                "games": 50, "nonce": "b" * 32, "ip": "203.0.113.9",
+                                "name": "anode01", "os": "Linux", "nh": 0,
+                                "claimed_at": now96 - 300}},
+                        "done": {}}
+                sp96 = Path(td96) / "state.json"
+                sp96.write_text(json.dumps(st96, ensure_ascii=False), encoding="utf-8")
+                env96 = dict(os.environ, CMSDIST_STATE=td96)
+                sha96 = lambda: hashlib.sha256(sp96.read_bytes()).hexdigest()
+                s96 = sha96()
+
+                def _ds96(cmd, *args):
+                    p96 = subprocess.run([sys.executable, str(ds96), cmd, *args],
+                                         capture_output=True, text=True, env=env96, timeout=60)
+                    if p96.returncode:
+                        raise RuntimeError(f"{cmd} 退出码 {p96.returncode}：{p96.stderr[-200:]}")
+                    return p96.stdout
+
+                d96 = json.loads(_ds96("admin-status"))
+                chk("T96 ★ admin-status 后 state.json 未被改写（只读真的只读）",
+                    sha96() == s96, "只读命令动了盘 = 又在造幻影")
+                chk("T96 ★ 过期任务留在 inprog 并标 lease_expired，队列不被幻影填充",
+                    len(d96["queue"]) == 0
+                    and {t["task_id"]: t["lease_expired"] for t in d96["inprog"]}
+                    == {"20288212-complex-24x16x72": True, "20288299-complex-24x16x72": False},
+                    f"queue={len(d96['queue'])}")
+                json.loads(_ds96("admin-lite", "30"))
+                json.loads(_ds96("admin-history"))
+                chk("T96 ★ lite/history 连跑后磁盘仍然原样", sha96() == s96)
+        except Exception as e:
+            skip("T96 幻影回归功能账", f"跑 dist_server 失败：{e}")
 
     # ── T68：backup.sh 的 QQbot 段已入库，别再被"清理 bot 痕迹"抹掉 ──────
     # 2026-10-28 那条「QQbot 不进仓库」的裁决，实际后果是仓库副本比服务器少一截，
