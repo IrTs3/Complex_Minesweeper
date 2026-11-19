@@ -642,6 +642,17 @@ server {
         return 404;
     }
 
+    # 公开静态区（/learn/、/zip/）共用的错误出口（外审 2026-11-19 I-01/I-08）：
+    # 错误页绝不带 immutable —— 404/403 被标 30 天不可变缓存，改名/回滚后
+    # 老访客会长期看到旧错误页；顺带把 403 归一成 404，autoindex 目录的
+    # 存在性就不再是一个可判定的 oracle（403=目录存在的枚举手段失效）。
+    location @cms_static_err {
+        internal;
+        add_header Cache-Control "no-store" always;
+        include /etc/nginx/snippets/cms-security-headers.conf;
+        return 404;
+    }
+
     location = /index.html {
         auth_request /__auth;
         error_page 401 403 502 504 =404 /__nf;
@@ -672,6 +683,8 @@ server {
             include /etc/nginx/snippets/cms-security-headers.conf;
             try_files $uri =404;
         }
+        # 错误页走 @cms_static_err：no-store + 403 归一 404（外审 I-01/I-08）
+        error_page 403 404 = @cms_static_err;
         add_header Cache-Control "public, max-age=2592000, immutable" always;
         include /etc/nginx/snippets/cms-security-headers.conf;
         try_files $uri $uri/ =404;
@@ -700,6 +713,8 @@ server {
             include /etc/nginx/snippets/cms-security-headers.conf;
             try_files $uri =404;
         }
+        # 错误页走 @cms_static_err：no-store + 403 归一 404（外审 I-01/I-08）
+        error_page 403 404 = @cms_static_err;
         add_header Cache-Control "public, max-age=2592000, immutable" always;
         include /etc/nginx/snippets/cms-security-headers.conf;
         try_files $uri $uri/ =404;
@@ -990,6 +1005,9 @@ listen [::]:443 ssl http2;
 ssl_certificate $CMS_PEM;
 ssl_certificate_key $CMS_KEY;
 ssl_protocols TLSv1.2 TLSv1.3;
+# TLS1.2 只留 AEAD 套件：CBC 落到 OpenSSL 默认会被现代基线点名（外审 I-04）。
+# TLS1.3 的套件独立协商，默认已是 AEAD，无需配置。RSA 系一并保留：换 RSA 证书不断链。
+ssl_ciphers ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-RSA-AES128-GCM-SHA256;
 ssl_session_cache shared:CMS_SSL:10m;
 ssl_session_timeout 1d;
 ssl_session_tickets off;
@@ -1010,6 +1028,7 @@ server {
     ssl_certificate $CMS_PEM;
     ssl_certificate_key $CMS_KEY;
     ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-RSA-AES128-GCM-SHA256;
     return 444;
 }
 REJ_BODY
@@ -1516,6 +1535,19 @@ $SSH "$SERVER" "
       *) echo \"    ✗ /zip/ 入口必须 no-cache —— immutable 会让重部署后的新版本永远到不了浏览器\" >&2; exit 1 ;;
     esac
     echo '    ✓ zip 网页版：静态 immutable + 入口 no-cache'
+    # 错误页不许带 immutable（外审 I-01）：404 被 30 天缓存，回滚/改名后老访客看到旧错误页
+    zerr=\$(tcurl http://localhost:${PORT}/zip/__missing_probe__ -I | grep -i '^cache-control:' | tr -d '\\r' || true)
+    printf '    %-40s %s\n' '/zip/ 404（未登录）' \"\${zerr:-（无 Cache-Control）}\"
+    case \"\$zerr\" in
+      *no-store*) : ;;
+      *) echo \"    ✗ /zip/ 下 404 必须 no-store（外审 I-01：错误页被 immutable 钉 30 天）\" >&2; exit 1 ;;
+    esac
+    zerrcode=\$(tcurl http://localhost:${PORT}/zip/vendor/ -o /dev/null -w '%{http_code}' || true)
+    if [ \"\$zerrcode\" != \"404\" ]; then
+        echo \"    ✗ /zip/vendor/ 目录应为 404（403 归一后目录存在性不再可判定，外审 I-08），实际 \$zerrcode\" >&2
+        exit 1
+    fi
+    echo '    ✓ zip 网页版：错误页 no-store + 目录 403 归一 404'
 
     # —— 学习站缓存头：静态资源 immutable 长缓存（省回源），入口必须 no-cache ——
     # 与上面「受保护资源不许缓存」是同一条铁律的两面：公开面靠 ?v= 击穿 + 长缓存省带宽；
@@ -1534,6 +1566,19 @@ $SSH "$SERVER" "
       *) echo \"    ✗ /learn/ 入口必须 no-cache —— immutable 会让重部署后的新版本永远到不了浏览器\" >&2; exit 1 ;;
     esac
     echo '    ✓ 学习站：静态 immutable + 入口 no-cache'
+    # 错误页不许带 immutable（外审 I-01）+ 目录 403 归一 404（I-08），与 /zip/ 同一套
+    lerr=\$(tcurl http://localhost:${PORT}/learn/__missing_probe__ -I | grep -i '^cache-control:' | tr -d '\\r' || true)
+    printf '    %-32s %s\n' '/learn/ 404（未登录）' \"\${lerr:-（无 Cache-Control）}\"
+    case \"\$lerr\" in
+      *no-store*) : ;;
+      *) echo \"    ✗ /learn/ 下 404 必须 no-store（外审 I-01：错误页被 immutable 钉 30 天）\" >&2; exit 1 ;;
+    esac
+    lerrcode=\$(tcurl http://localhost:${PORT}/learn/pages/ -o /dev/null -w '%{http_code}' || true)
+    if [ \"\$lerrcode\" != \"404\" ]; then
+        echo \"    ✗ /learn/pages/ 目录应为 404（403 归一后目录存在性不再可判定，外审 I-08），实际 \$lerrcode\" >&2
+        exit 1
+    fi
+    echo '    ✓ 学习站：错误页 no-store + 目录 403 归一 404'
 
     # —— 鉴权服务可达（否则谁都登不进去）——
     if curl -s -o /dev/null -f http://127.0.0.1:8090/health; then

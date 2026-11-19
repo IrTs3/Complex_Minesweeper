@@ -20,6 +20,7 @@ import argparse
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import time
@@ -814,6 +815,9 @@ ADMIN_EXEMPT_CMDS = {
     # 同理：music-default 的 list 只读、不该问口令；push/rm/clear 在
     # cmd_music_default 里就地 require_admin。
     "music-default": "cmd_music_default 内部自己校验（list 只读不问口令），不要重复问用户",
+    # 同理：f2b 的 status 只读、不该问口令；unban 在 cmd_f2b 里
+    # 就地 require_admin（且先 --yes 后口令，反馈顺序与 revoke-all 一致）。
+    "f2b": "cmd_f2b 内部自己校验（status 只读不问口令），不要重复问用户",
 }
 
 #: **在命令自己内部**校验管理口令的命令（不在 ADMIN_GUARDED_CMDS 里，
@@ -822,7 +826,7 @@ ADMIN_EXEMPT_CMDS = {
 #:
 #: 界面（gate_ui._verify_ops）要判断「这个操作喂了 admin 行对不对」，靠的就是这个
 #: 集合——**别在界面里硬编码命令名**，那会变成第二份清单，改名时静默失效。
-INPLACE_ADMIN_CMDS = frozenset({"gate", "webbg", "landing", "gate-path", "music-default"})
+INPLACE_ADMIN_CMDS = frozenset({"gate", "webbg", "landing", "gate-path", "music-default", "f2b"})
 assert INPLACE_ADMIN_CMDS <= set(ADMIN_EXEMPT_CMDS), "就地校验的命令必须同时写进豁免表并说明理由"
 assert not (INPLACE_ADMIN_CMDS & ADMIN_GUARDED_CMDS), \
     "就地校验的命令不能同时出现在 ADMIN_GUARDED_CMDS 里（会问两遍口令）"
@@ -2711,6 +2715,108 @@ def cmd_gate_path(a) -> None:
 
 
 # --------------------------------------------------------------------------
+# fail2ban（SSH 爆破封禁）：status 只读；unban 解封某个 IP（就地校验管理口令）。
+# jail 名钉死 sshd —— 这是本机唯一启用的 jail（jail.d/sshd.local），界面不给选择。
+# --------------------------------------------------------------------------
+F2B_JAIL = "sshd"
+
+
+def f2b_valid_ip(s: str):
+    """严格校验一个要喂给 `fail2ban-client unbanip` 的 IP。
+
+    用 ipaddress 全解析（IPv4/IPv6 都收），除它之外的任何形状一律 None ——
+    这个值会拼进远端 shell 命令串，**白名单校验是唯一的注入防线**，
+    别想着「再转义一下就行」。
+    """
+    try:
+        ip = ipaddress.ip_address(s.strip())
+    except (ValueError, AttributeError):
+        return None
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+        return str(ip.ipv4_mapped)
+    return str(ip)
+
+
+def _f2b_status_remote(a) -> dict:
+    """ssh 过去跑 `fail2ban-client status <jail>`，解析成结构化数据。
+
+    解析口径：fail2ban-client 的输出是「标签:\\t值」行，Banned IP list 是空格分隔。
+    服务未装/未运行/jail 不存在时 reachable=False，原样带回原始输出一行摘要
+    —— **如实报障，不装作「没有封禁」**（那是两个不同的状态）。
+    """
+    r = run(ssh_cmd(a) + [f"fail2ban-client status {shq(F2B_JAIL)} 2>&1"],
+            check=False)
+    out = (r.stdout or "").strip()
+    if r.returncode != 0 or "Jail '" in out or "failed with" in out.lower():
+        return {"reachable": False, "detail": out.splitlines()[-1] if out
+                else f"远端执行失败（退出码 {r.returncode}）", "banned": []}
+    d: dict = {"reachable": True, "banned": []}
+    for line in out.splitlines():
+        if ":" not in line:
+            continue
+        k, _, v = line.partition(":")
+        # 输出行带树形前缀（`|- Filter` 下的 `|  |- Currently failed:`、`` `- ``
+        # 结尾），且管道后跟着空格 —— 一次 strip 掉整套树形字符再对标签
+        k = k.strip().strip("|`- ").strip()
+        v = v.strip()
+        if k == "Currently failed":
+            d["currently_failed"] = v
+        elif k == "Total failed":
+            d["total_failed"] = v
+        elif k == "Currently banned":
+            d["currently_banned"] = v
+        elif k == "Total banned":
+            d["total_banned"] = v
+        elif k == "Banned IP list":
+            d["banned"] = v.split() if v else []
+    return d
+
+
+def cmd_f2b(a) -> None:
+    _refuse_argv_password(a)
+    _refuse_argv_admin(a)
+    if a.action == "status":
+        d = _f2b_status_remote(a)
+        if a.json:
+            print(json.dumps(d, ensure_ascii=False))
+            return
+        if not d["reachable"]:
+            die(f"fail2ban 不可达：{d.get('detail')}\n"
+                "  （服务没起？jail 没配？先在服务器上跑 `fail2ban-client status` 对一下）")
+        info(f"jail        : {F2B_JAIL}")
+        info(f"当前失败    : {d.get('currently_failed', '?')}（窗口内，findtime 计数）")
+        info(f"累计失败    : {d.get('total_failed', '?')}")
+        info(f"当前封禁    : {d.get('currently_banned', '?')}")
+        info(f"累计封禁    : {d.get('total_banned', '?')}")
+        bl = d["banned"]
+        info("封禁列表    : " + ("、".join(bl) if bl else "（空）"))
+        info("  解封一条  : cms f2b unban <IP>   （解封立即生效，不 reload 任何东西）")
+        return
+    # ── unban：写操作，就地校验管理口令 ──
+    ip = f2b_valid_ip(a.ip or "")
+    if ip is None:
+        die(f"IP 不合法：{a.ip!r}（只接受 IPv4/IPv6 字面量，别的东西一律不进远端 shell）")
+    # --yes 的检查放在 require_admin **之前**：漏 --yes 时的正确反馈是「加 --yes」，
+    # 不是「口令不正确」（revoke-all 同款顺序，免得用户反复重输一个没输错的口令）。
+    if not getattr(a, "yes", False):
+        die("unban 会立刻放行一个被爆破封锁的 IP，需要 --yes 显式确认\n"
+            "  （界面调用自动带 --yes；人手敲命令加它，是给你自己看一眼的机会）")
+    require_admin(a, action=f"解封 fail2ban 封禁的 {ip}")
+    r = run(ssh_cmd(a) + [f"fail2ban-client set {shq(F2B_JAIL)} unbanip {shq(ip)}"],
+            check=False)
+    out = (r.stdout or "").strip()
+    # 实测（fail2ban 1.0.2）：真解封输出 "1"，IP 本就不在名单输出 "0"，
+    # 两种情况 exit 都是 0 —— 只看 returncode 会把「没解封任何东西」假报成成功。
+    if r.returncode != 0:
+        die(f"解封失败：{(r.stdout or r.stderr or '').strip()}")
+    gate_audit(a.state, f"f2b unban {ip}{' (本来就不在名单)' if out != '1' else ''}")
+    if out == "1":
+        info(f"  ✓ {ip} 已解封（立即生效）。它若再犯，攒够 maxretry 会被重新封上。")
+    else:
+        info(f"  · {ip} 本来就不在封禁列表里（未实际改动）。当前名单以 `cms f2b status` 为准。")
+
+
+# --------------------------------------------------------------------------
 # 使用记录缓存（服务器端产生的 usage.jsonl 拉回来后的本地副本）
 # --------------------------------------------------------------------------
 def usage_cache_path(state: Path) -> Path:
@@ -4317,6 +4423,19 @@ def main() -> None:
     p.add_argument("--json", action="store_true", help="status 输出一行 JSON（给界面读）")
     _add_admin_args(p)          # 管理口令（set / rotate）
     p.set_defaults(fn=cmd_gate_path)
+
+    # fail2ban（SSH 爆破封禁）。status 只读；unban 要管理口令（cmd_f2b 就地校验）。
+    # jail 名钉死 sshd；IP 的校验发生在 CLI 里（ipaddress 全解析，界面不抄规则）。
+    p = sub.add_parser("f2b",
+                       help="fail2ban SSH 封禁：看当前封了谁（status）/ 解封某个 IP（unban）")
+    p.add_argument("action", choices=("status", "unban"),
+                   help="status 看封禁列表；unban 放行一个 IP（立即生效）")
+    p.add_argument("ip", nargs="?",
+                   help="unban 用：IPv4 或 IPv6 字面量（其他形状一律不进远端 shell）")
+    p.add_argument("--json", action="store_true", help="status 输出一行 JSON（给界面读）")
+    p.add_argument("--yes", action="store_true", help="unban 确认执行（不加则只提示要加）")
+    _add_admin_args(p)          # 管理口令（unban）
+    p.set_defaults(fn=cmd_f2b)
 
     a = ap.parse_args()
     # ★ 先验「会进远端 shell 的参数」，再谈别的：万一有人把 --web-root 写成带引号的

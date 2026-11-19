@@ -5437,6 +5437,75 @@ console.log(JSON.stringify(out));
             "case \\\"\\$f01loc\\\" in" in dw97s and "*'://'*)" in dw97s,
             "跳转域名反射没有行为级断言 = 下次有人改回绝对跳转静默复发")
 
+    # ── T98：fail2ban 解封面板（2026-11-19）──────────────────────
+    # 三层各守一段，谁缺一段用户都会在按钮上撞墙：
+    #   · CLI：ipaddress 白名单是唯一注入防线（unban 的 ip 拼进远端 shell）；
+    #     实测 fail2ban 1.0.2 的 unbanip「命中/未命中」exit 都为 0，必须按 stdout 区分，
+    #     只看 returncode 会把「没解封任何东西」假报成成功。
+    #   · gate_ui：OPS 喂 admin（f2b 是 INPLACE_ADMIN——status 只读、unban 就地问）；
+    #     run_op 在起子进程之前对 ip 做同一道前置复检。
+    #   · 前端：芯片常驻（0 也显示）+ 面板名单行 + 手动 IP 输入 + 确认弹窗。
+    print("\nT98 fail2ban 解封面板：CLI 白名单/退出码语义 + gate_ui 双闸 + 前端面板")
+    gm98 = load_gate_manager()
+    gu98 = load_gate_ui()
+    gm_src98 = (HERE / "gate_manager.py").read_text(encoding="utf-8")
+    gu_src98 = (TOOL).read_text(encoding="utf-8")
+    fe_src98 = (HERE / "gateui" / "app.js").read_text(encoding="utf-8")
+
+    chk("T98 ★ f2b 注册成 INPLACE_ADMIN（status 不问口令、unban 就地校验）且不进 EXEMPT 之外的表",
+        "f2b" in gm98.INPLACE_ADMIN_CMDS
+        and "f2b" not in getattr(gm98, "ADMIN_GUARDED_CMDS", set()),
+        "f2b 被当 ADMIN_GUARDED = status 也问口令，看一眼封禁名单都要输密码")
+    chk("T98 ★ f2b 在 ADMIN_EXEMPT_CMDS 里有书面理由（审计规矩：豁免必须写明为什么）",
+        "f2b" in gm98.ADMIN_EXEMPT_CMDS
+        and "cmd_f2b 内部自己校验" in gm98.ADMIN_EXEMPT_CMDS["f2b"],
+        "豁免没写理由 = 下次审查时说不清为什么这条不问口令")
+
+    _ok98 = [gm98.f2b_valid_ip("192.0.2.55"), gm98.f2b_valid_ip("::1"),
+             gm98.f2b_valid_ip(" 2001:db8::9 "), gm98.f2b_valid_ip("::ffff:192.0.2.9")]
+    _bad98 = [gm98.f2b_valid_ip(""), gm98.f2b_valid_ip("1.2.3.4/24"),
+              gm98.f2b_valid_ip("300.1.2.3"), gm98.f2b_valid_ip("'; rm -rf /'"),
+              gm98.f2b_valid_ip("192.0.2.9\nfoo"), gm98.f2b_valid_ip(None)]
+    chk("T98 ★ ipaddress 白名单：合法字面量收（IPv4/IPv6/映射回落）、其余一律 None",
+        _ok98 == ["192.0.2.55", "::1", "2001:db8::9", "192.0.2.9"]
+        and all(b is None for b in _bad98),
+        f"白名单失守 = unban 的 ip 直通远端 shell（实际 {_ok98} / {_bad98}）")
+    chk("T98 ★ unbanip 按 stdout 分命中/未命中（实测两者 exit 都为 0）",
+        'if out == "1":' in gm_src98 and "本来就不在封禁列表" in gm_src98
+        and "只看 returncode 会把" in gm_src98,
+        "只看 returncode = 解封一个没封的 IP 也报「✓ 已解封」，用户被假成功骗走")
+    chk("T98 ★ unban 缺 --yes 时在问口令**之前**拒绝（省得反复重输没输错的口令）",
+        "需要 --yes 显式确认" in gm_src98
+        and gm_src98.index("需要 --yes 显式确认") < gm_src98.index("require_admin(a, action=f\"解封"),
+        "顺序反了 = 用户输完口令才被告知要 --yes，revoke-all 同款顺序的教训白记")
+
+    ops98 = gu98.OPS
+    chk("T98 ★ OPS 两条都注册：status 带 --json，unban 带 {ip} 占位符 + 字面 --yes + admin 行",
+        ops98.get("f2b_status", {}).get("argv") == ["f2b", "status", "--json"]
+        and ops98.get("f2b_unban", {}).get("argv") == ["f2b", "unban", "{ip}", "--yes"]
+        and ("admin", "--admin-stdin") in ops98.get("f2b_unban", {}).get("stdin", []),
+        "OPS 少一条或 flag 写错 = bootstrap 对不上 CLI --help，cmsui 直接拒绝启动（这是设计）")
+    try:
+        gu98.run_op("f2b_unban", {"ip": "'; rm -rf /'", "admin": "x"})
+        _pre98 = False
+    except gu98.ApiError as e:
+        _pre98 = getattr(e, "status", None) == 400
+    except Exception:
+        _pre98 = False
+    chk("T98 ★ run_op 在起子进程**之前**拒绝非法 ip（服务端第二道闸，不依赖 CLI 兜底）",
+        _pre98,
+        "垃圾 ip 能进 _build_argv = 注入防线只剩远端一道，绕过 CLI 调用面就穿")
+    chk("T98 ★ GET /api/fail2ban 路由存在且只读（转调 CLI --json，不自己解析树形输出）",
+        '"/api/fail2ban"' in gu_src98 and "f2b_status" in gu_src98,
+        "界面自己抄一份解析 = 树形前缀口径漂移（第一版就栽过一次）")
+    chk("T98 ★ 前端：loadFail2ban 进 loadAll、芯片 0 也显示、面板有名单行+手动输入+刷新",
+        "loadFail2ban();" in fe_src98
+        and "0（无封禁）" in fe_src98
+        and "unban:" in fe_src98 and "刷新名单" in fe_src98
+        and "runWrite('f2b_unban'" in fe_src98
+        and "txt.indexOf('fail2ban') === 0" in fe_src98,
+        "芯片只在有封禁时出现 = 没人被封时用户根本不知道这个面板存在")
+
     # ── T68：backup.sh 的 QQbot 段已入库，别再被"清理 bot 痕迹"抹掉 ──────
     # 2026-10-28 那条「QQbot 不进仓库」的裁决，实际后果是仓库副本比服务器少一截，
     # 而 deploy-backup.sh 是**整文件 scp 覆盖**——谁跑一次部署，bot 两路快照就静默没了。

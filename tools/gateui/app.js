@@ -975,6 +975,23 @@
         } else if (gp) {
             box.append(withB('登录入口', '读不到（SSH 失败）', 'warn'));
         }
+
+        // fail2ban（2026-11-19）。误封了访客的出口 IP 时要能立刻看见并解封，
+        // 所以封禁数要常驻顶栏：0 也显示（「0=没人被封」本身就是要看到的事实）。
+        const fb = state.f2b;
+        if (fb && fb.reachable) {
+            const n = (fb.banned || []).length;
+            const c = withB('fail2ban 封禁',
+                n ? `${n} 个在禁` : '0（无封禁）', n ? 'bad' : 'ok');
+            c.title = 'SSH 爆破自动封禁（maxretry=5 / 10 分钟 / 封 1 小时）。'
+                + '点击：看当前名单 / 解封某个 IP（要管理口令）。'
+                + '统计：当前失败 ' + (fb.currently_failed || '?')
+                + ' · 累计失败 ' + (fb.total_failed || '?')
+                + ' · 累计封禁 ' + (fb.total_banned || '?') + '。';
+            box.append(c);
+        } else if (fb) {
+            box.append(withB('fail2ban', '读不到（SSH 失败）', 'warn'));
+        }
     }
 
     function withB(label, value, cls) {
@@ -1288,6 +1305,7 @@
         loadMusic();
         loadLanding();
         loadGatePath();
+        loadFail2ban();
         loadUsageFacets();
         // 顶栏「刷新」也是一次手动拉取，所以同样在顶部说一声
         loadUsage({ pull: true }).then((d) => {
@@ -1358,6 +1376,19 @@
             state.gatePath = await api('/api/gate-path');
         } catch (e) {
             state.gatePath = { token: null, path: null, exists: false, error: e.message };
+        }
+        renderChips();
+    }
+
+    /**
+     * fail2ban（SSH 爆破封禁）的现状。**只读**，不要管理口令——
+     * 解封时才问（runWrite 里的 askAdmin）。它要 SSH，单独一个接口不拖慢顶栏本地项。
+     */
+    async function loadFail2ban() {
+        try {
+            state.f2b = await api('/api/fail2ban');
+        } catch (e) {
+            state.f2b = { reachable: false, banned: [], error: e.message };
         }
         renderChips();
     }
@@ -2661,6 +2692,101 @@
         }
     }
 
+    // ── fail2ban（SSH 爆破封禁）────────────────────────────────
+    //
+    // 只做「看名单 / 解封」两件事，真正的活全部转调 `cms f2b`
+    // （IP 白名单校验 + --yes 显式确认 + 审计都在 CLI）。
+    // jail 名钉死 sshd：服务器上只有这一个 jail，界面不给选择。
+    async function doFail2ban() {
+        await loadFail2ban();              // 先拿最新名单，别拿旧值做判断
+        const action = await openInfoDialog({
+            title: 'fail2ban 封禁（SSH 爆破防护）',
+            okText: '关闭',
+            fill: (body, ctl) => {
+                if (!state.f2b || !state.f2b.reachable) {
+                    body.append(el('p', 'dlg-empty bad',
+                        '读不到 fail2ban 状态：'
+                        + ((state.f2b && state.f2b.error) || 'SSH 失败或服务没起')));
+                    body.append(el('p', 'dlg-note',
+                        '先确认服务器上 fail2ban-client status sshd 正常，再回来点刷新。'));
+                    return;
+                }
+                const fb = state.f2b;
+                body.append(kvBlock([
+                    ['在禁 IP 数', String((fb.banned || []).length)],
+                    ['10 分钟窗口内失败', fb.currently_failed || '—'],
+                    ['累计失败', fb.total_failed || '—'],
+                    ['累计封禁', fb.total_banned || '—'],
+                ]));
+                body.append(el('p', 'dlg-note',
+                    '规则：10 分钟内错 5 次密码封 1 小时（自动到期解封，不用管）。'
+                    + '解封只对「确认是自己人被误封」用——被封的几乎都是爆破机，'
+                    + '解封等于放它进来继续试。'));
+
+                if (fb.banned && fb.banned.length) {
+                    body.append(el('p', 'dlg-label', '当前被封的 IP'));
+                    const list = el('div', 'mu-list');
+                    for (const ip of fb.banned) {
+                        const row = el('div', 'mu-row');
+                        const name = el('span', null, ip);
+                        const bUn = el('button', 'danger', '解封');
+                        bUn.type = 'button';
+                        bUn.title = '立刻放行这个 IP（它若再犯，攒够 5 次会被重新封上）';
+                        bUn.addEventListener('click', () => ctl.close('unban:' + ip));
+                        row.append(name, bUn);
+                        list.append(row);
+                    }
+                    body.append(list);
+                } else {
+                    body.append(el('p', 'dlg-empty', '现在没有任何 IP 在封禁名单里。'));
+                }
+
+                // 手动解封：名单外也允许（fail2ban-client 报「不在名单」时如实转达）
+                const inp = el('input');
+                inp.type = 'text';
+                inp.placeholder = '手动输入 IP 解封（例如访客被误封）';
+                const acts = el('div', 'dlg-acts');
+                const bUn = el('button', 'primary', '解封这个 IP');
+                bUn.type = 'button';
+                bUn.addEventListener('click', () => {
+                    const v = inp.value.trim();
+                    if (!v) { toast('先填一个 IP', true); return; }
+                    ctl.close('unban:' + v);
+                });
+                const bRf = el('button', '', '刷新名单');
+                bRf.type = 'button';
+                bRf.addEventListener('click', () => ctl.close('refresh'));
+                acts.append(inp, bUn, bRf);
+                body.append(acts);
+            },
+        });
+
+        // —— 对话框已关，口令/确认开在同一个 <dialog> 上（不能嵌套）——
+        if (action === 'refresh') {
+            await doFail2ban();
+        } else if (action && action.indexOf('unban:') === 0) {
+            const ip = action.slice(6).trim();
+            // 本地只做**粗筛**（只含十六进制/点/冒号）：省一次白输的管理口令，
+            // 不复刻 CLI 的 ipaddress 严格语义 —— 粗筛放过的垃圾由 CLI 报错如实显示。
+            if (!/^[0-9a-fA-F:.]{2,45}$/.test(ip)) {
+                toast('这不像一个 IP：只接受 IPv4 / IPv6 字面量', true);
+                return;
+            }
+            const ok = await confirmDanger('解封 ' + ip,
+                '将立刻放行 ' + ip + '——它马上可以重新连 SSH 尝试密码。\n'
+                + '确认这是被误封的自己人（校园网出口、你自己的机器），不是爆破机。',
+                '解封');
+            if (!ok) return;
+            const r = await runWrite('f2b_unban', { ip: ip }, '解封 ' + ip,
+                { showOutput: true });
+            if (r && r.ok) {
+                await loadFail2ban();
+                if (/已解封/.test(r.out || '')) flash(ip + ' 已解封');
+                else flash(ip + ' 不在封禁名单里（未实际改动）');
+            }
+        }
+    }
+
     // ── 网页背景图 ──────────────────────────────────────────────
     //
     // 背景图的**公开使用授权还没拿到**，所以线上必须能「一键撤下成白底」。
@@ -3613,6 +3739,7 @@
         else if (txt.indexOf('默认歌单') === 0) doMusic();
         else if (txt.indexOf('默认页') === 0) doLanding();
         else if (txt.indexOf('登录入口') === 0) doGatePath();
+        else if (txt.indexOf('fail2ban') === 0) doFail2ban();
     });
 
     // ── 种子工具箱：复数扫雷种子串 ⇄ 明文 JSON ──

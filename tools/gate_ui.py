@@ -51,6 +51,7 @@ import hmac
 import http.server
 import importlib.util
 import io
+import ipaddress
 import json
 import os
 import re
@@ -283,6 +284,14 @@ OPS = {
     "gate_path_rotate": {"argv": ["gate-path", "rotate"],
                          "stdin": [("admin", "--admin-stdin")]},
 
+    # ── fail2ban（SSH 爆破封禁，2026-11-19）──
+    # status 只读不问口令（unban 需要它先看名单）；unban 的管理口令走 --admin-stdin，
+    # --yes 是 CLI 的显式确认要求，界面代带。IP 的**校验发生在 CLI 里**（ipaddress
+    # 全解析，唯一注入防线），POST 处理器只做一道前置复检拦明显垃圾，口径以 CLI 为准。
+    "f2b_status": {"argv": ["f2b", "status", "--json"]},
+    "f2b_unban":  {"argv": ["f2b", "unban", "{ip}", "--yes"],
+                   "stdin": [("admin", "--admin-stdin")]},
+
     # ── 管理口令自身 ──
     # 更换：先「当前口令」再「新口令」；一个 --password-stdin 覆盖两次读，
     # 所以第二行不重复加 flag（写 None）。
@@ -448,6 +457,15 @@ def run_op(op: str, params: dict) -> dict:
     spec = OPS.get(op)
     if spec is None:
         raise ApiError(f"不支持的操作：{op}", 404)
+
+    # f2b_unban 的 ip 会拼进远端 shell 命令串：CLI 里 ipaddress 白名单是唯一
+    # 注入防线，这里先做一道同样的前置复检，把明显垃圾拦在子进程之前
+    # （口径以 CLI 为准，这里只拦不补 —— 校验通过的不代表 CLI 会接受，两道都过才算数）。
+    if op == "f2b_unban":
+        try:
+            ipaddress.ip_address(str(params.get("ip", "")).strip())
+        except (ValueError, AttributeError):
+            raise ApiError("IP 不合法：只接受 IPv4/IPv6 字面量", 400) from None
 
     argv = _build_argv(spec, params)
 
@@ -2028,6 +2046,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 # 前缀与路径分开回：token 只来自 CLI，SITE_ORIGIN 只是站点地址，
                 # 由前端拼成完整网址（复制给用户的就是拼好的那条）。
                 data["site"] = SITE_ORIGIN
+                return self._json({"ok": True, "data": data})
+            if path == "/api/fail2ban":
+                # fail2ban 现状（只读）。转调 `cms f2b status --json`，
+                # 解析口径（树形前缀剥离等）只在 CLI 有一份，界面不重抄。
+                r = run_op("f2b_status", {"_state": self.state})
+                data = {"reachable": False, "banned": []}
+                for line in (r.get("out") or "").splitlines():
+                    line = line.strip()
+                    if line.startswith("{"):
+                        try:
+                            j = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        data = {"reachable": bool(j.get("reachable")),
+                                "banned": j.get("banned") or [],
+                                "currently_failed": j.get("currently_failed"),
+                                "total_failed": j.get("total_failed"),
+                                "currently_banned": j.get("currently_banned"),
+                                "total_banned": j.get("total_banned")}
                 return self._json({"ok": True, "data": data})
             if path == "/api/ops":
                 # 让前端知道哪些操作存在、哪些要口令（不暴露任何敏感信息）
