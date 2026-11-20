@@ -1,5 +1,4 @@
-> 这场纯蓝幻乐结束了，以后除了 bug 补丁不会再更新啦~
-> 玩的开心呀！
+## <font color="#66ccff">这场纯蓝幻乐结束了，以后除了 bug 补丁不会再更新啦~<br>玩的开心呀！</font>
 
 # Complex Minesweeper（复数扫雷）
 
