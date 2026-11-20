@@ -1,3 +1,6 @@
+> 这场纯蓝幻乐结束了，以后除了 bug 补丁不会再更新啦~
+> 玩的开心呀！
+
 # Complex Minesweeper（复数扫雷）
 
 复数扫雷——纯 C++20 + SFML 3 的桌面游戏。传统扫雷的提示是"周围有几颗雷"，本作的提示是**周围雷的复数和的模长**：|Σz| = √(real² + imag²)。四种雷 +1 / -1 / +i / -i 会相互抵消，"0"不一定安全；把每颗雷的精确复值推出来并标对，才是本作的完全形态。
@@ -362,7 +365,7 @@ text
 - **libpng**（PNG 许可）——macOS 分发包内的 PNG 加载链
 - **IBM Plex Serif**（SIL OFL 1.1）——界面字体（`assets/IBMPlexSerif-Regular.ttf`）
 - 中文使用系统中文字体（macOS Hiragino Sans GB 等 / Windows 雅黑黑体等 / Linux Noto CJK，候选顺序见 `Renderer::loadCjkFont`）
-- **游戏背景图《云上城堡》**——画师 木子森森森MORI（授权使用；视频原稿 https://b23.tv/rHT5In4，BV1rV411T7GH）
+- **游戏背景图《云上城堡》**——画师 木子森森森MORI（授权使用；视频原稿 <https://b23.tv/rHT5In4> ，BV 号 BV1rV411T7GH）
 - dmg 安装盘背景（`assets/dmg_bg.png` / `@2x`）为程序生成素材，不随游戏包分发
 
 ## 十二、网页版与访问闸门

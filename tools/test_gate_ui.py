@@ -4885,8 +4885,15 @@ def run_tests(srv: Server, port: int, tok: str, state_dir: Path) -> None:
         "e*0.95+s*0.05" in hc_src and hc_src.count("EMA=") >= 3)
     chk("T62 ★ 三项都先武装后判红：样本 <720 轮（约 24h）只采集，EMA 未收敛时当基准必误报",
         hc_src.count('-lt 720') == 3 and "满约 24h 才开始判红" in hc_src)
-    chk("T62 ★ 三个绝对地板一个不少（50ms / 100MB/h / 15Mbit/s）——凌晨零增长时「3 倍」毫无意义",
-        "s>3*e && e>0.05" in hc_src and "s>5*e && s>100" in hc_src and "s>3*e && s>15" in hc_src)
+    chk("T62 ★ 绝对地板一个不少（50ms / 15Mbit/s）+ 磁盘增速改双窗判据（2026-11-20："
+        "30min 均值 >100 或 24h 均值 >50）——旧「3 轮窗 ×>5 倍 EMA」连吃三次良性突发"
+        "（11-17 代理日志 128 / 11-18 备份 1.6G / 11-20 未知 15MB 写后即删年化 156），"
+        "窗口拉长后突发摊薄、持续洪水整窗过线，检出覆盖不受损",
+        "s>3*e && e>0.05" in hc_src and "s>3*e && s>15" in hc_src
+        and "disk-samples.log" in hc_src and "30min 窗均值" in hc_src and "24h 窗均值" in hc_src
+        and "exit !(s>100)" in hc_src and "exit !(s>50)" in hc_src
+        and "-ge 1500" in hc_src and "-ge 82800" in hc_src and "90000" in hc_src,
+        "双窗判据缺一条 = 突发误报复发或慢刀子洪水漏报（地板/跨度护栏都要在）")
     chk("T62 ★ 延迟采样用真实内容页 /learn/ 取 5 次（小探针在带宽压测下假阴——frp-dad 实测 "
         "2.18s vs 真实页 3.87s），失败样本丢弃且采样不足要吭声不静默",
         "${WEB_PORT}/learn/" in hc_src and "'%{time_total}'" in hc_src

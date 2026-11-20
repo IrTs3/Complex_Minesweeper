@@ -317,11 +317,23 @@ EOF
     if [ "${LAST_TS:-0}" -gt 0 ] && [ $((now - LAST_TS)) -ge 60 ]; then
         dt=$((now - LAST_TS))
         # 磁盘增速 MB/h（可为负：logrotate 压缩/删除也是真实基线的一部分）。
-        # 3 轮滑动窗差分（D_T1 是三轮前的样本，跨度约 6 分钟）：单轮差分 ×30 外推
-        # 会被突发写入放大成假警报（2026-11-17 22:27 实例：代理日志一次刷几 MB，
-        # 2 分钟读数冲到 128MB/h，下一轮没突发就自愈回 UP——真警报反而吵不醒人）；
-        # 窗内平均后要持续灌满整个窗口才过 100MB/h 地板，单发突发与慢刀子真洪水的
-        # 区分度就出来了。
+        # ★ 双窗判据（2026-11-20 用户定稿）：**30 分钟窗均值 >100** 或 **24 小时窗均值 >50**。
+        #   旧判据（3 轮滑动窗，>5×EMA 且 >100）连吃三次良性突发：
+        #     11-17 代理日志单轮 128（修法=3 轮窗）、11-18 备份 1.6G（修法=SKIP 白名单）、
+        #     11-20 05:03 未知 ~15MB「写后即删」突发年化 156 → DOWN 4m19s 自愈
+        #     （全盘 mtime 扫描/docker/journald 全查过，零持久痕迹）。
+        #   窗口拉长后突发被摊薄：15MB/30min = 30MB/h，压不到 100 地板；
+        #   持续洪水（小时级速率）整窗都过线，检出覆盖不受损——
+        #   两条窗都要「整窗持续」才响，单发突发从机制上进不了判据。
+        #   逐轮样本进 ring 文件（ts used_kb，保留 25h），备份窗 SKIP 只免判不免记。
+        RING="$BASELINE_DIR/disk-samples.log"
+        printf '%s %s\n' "$now" "$used_kb" >> "$RING" 2>/dev/null || true
+        if [ -s "$RING" ]; then
+            # 剪 25h 前的样本、顺带压掉畸形行（半行/空行进差分就是垃圾）
+            awk -v cut=$((now - 90000)) \
+                '$1 ~ /^[0-9]+$/ && $1 >= cut && $2 ~ /^[0-9]+$/ {print $1, $2}' \
+                "$RING" > "$RING.tmp" 2>/dev/null && mv "$RING.tmp" "$RING" 2>/dev/null || true
+        fi
         if [ "${D_T1:-0}" -gt 0 ] && [ $((now - D_T1)) -ge 120 ]; then
             d_rate=$(awk -v u="$used_kb" -v lu="${D_U1:-$used_kb}" -v dt=$((now - D_T1)) 'BEGIN{printf "%.2f", (u-lu)/1024/(dt/3600)}')
             if [ "${D_N:-0}" -ge 1 ]; then
@@ -330,17 +342,40 @@ EOF
                 D_EMA=$d_rate
             fi
             D_N=$(( ${D_N:-0} + 1 ))
+            # 双窗锚点 = 窗内最老样本。跨度护栏：30min 窗 ≥25min、24h 窗 ≥23h
+            # （不给满跨度就判 = 采样断档时拿短窗冒充长窗，年化又炸）。
+            a30=$(awk -v cut=$((now - 1800)) '$1 >= cut {print $1, $2; exit}' "$RING" 2>/dev/null)
+            a24=$(awk -v cut=$((now - 86400)) '$1 >= cut {print $1, $2; exit}' "$RING" 2>/dev/null)
+            w30=""; w24=""
+            if [ -n "$a30" ]; then
+                t30=${a30%% *}; u30=${a30#* }
+                [ $((now - t30)) -ge 1500 ] && \
+                    w30=$(awk -v u="$used_kb" -v lu="$u30" -v dt=$((now - t30)) 'BEGIN{printf "%.2f", (u-lu)/1024/(dt/3600)}')
+            fi
+            if [ -n "$a24" ]; then
+                t24=${a24%% *}; u24=${a24#* }
+                [ $((now - t24)) -ge 82800 ] && \
+                    w24=$(awk -v u="$used_kb" -v lu="$u24" -v dt=$((now - t24)) 'BEGIN{printf "%.2f", (u-lu)/1024/(dt/3600)}')
+            fi
             if [ "$D_N" -lt 720 ]; then
-                echo "基线采集中（磁盘）：n=${D_N}/720，本轮 ${d_rate} MB/h EMA=${D_EMA} —— 满约 24h 才开始判红"
+                echo "基线采集中（磁盘）：n=${D_N}/720，本轮 ${d_rate} MB/h EMA=${D_EMA}；30min 窗 ${w30:-攒中} / 24h 窗 ${w24:-攒中} MB/h —— 窗满跨度才开始判红"
             elif systemctl is-active --quiet cmsgate-backup.service 2>/dev/null \
                 || find /root/cms-backup -name '*.tar.gz' -mmin -10 2>/dev/null | grep -q .; then
                 # 写盘者是身份明确的自己人：每日备份正在跑（服务 active，或 10 分钟内
                 # 有新快照落盘=窗口右端跨到了备份上）。191M 的 gzip 灌 3 分钟就是
-                # 1.6GB/h，滑动窗照样炸——这不是塞盘攻击（2026-11-18 凌晨 03:20 实弹，
-                # 周三全量备份首撞武装基线）。样本照常进基线，只是不开枪。
-                echo "SKIP: 每日备份写盘窗——本轮磁盘增速 ${d_rate} MB/h 只记账不判红"
-            elif awk -v s="$d_rate" -v e="$D_EMA" 'BEGIN{exit !(s>5*e && s>100)}'; then
-                disk_alarm="磁盘增速异常：+${d_rate} MB/h（滚动基线 ${D_EMA} MB/h，>5 倍且 >100MB/h 地板）—— 慢刀子：日志洪水 / 被塞盘，盘满时第 5 项才亮已太迟"
+                # 1.6GB/h，短窗照样炸——这不是塞盘攻击（2026-11-18 凌晨 03:20 实弹，
+                # 周三全量备份首撞武装基线）。样本照常进 ring，只是不开枪。
+                echo "SKIP: 每日备份写盘窗——本轮 30min 窗 ${w30:-攒中} / 24h 窗 ${w24:-攒中} MB/h 只记账不判红"
+            else
+                disk_alarm=""
+                if [ -n "$w30" ] && awk -v s="$w30" 'BEGIN{exit !(s>100)}'; then
+                    disk_alarm="磁盘增速异常：30min 窗均值 +${w30} MB/h（地板 100）"
+                fi
+                if [ -n "$w24" ] && awk -v s="$w24" 'BEGIN{exit !(s>50)}'; then
+                    disk_alarm="${disk_alarm:+$disk_alarm；}磁盘增速异常：24h 窗均值 +${w24} MB/h（地板 50）"
+                fi
+                [ -n "$disk_alarm" ] && \
+                    disk_alarm="$disk_alarm —— 慢刀子：日志洪水 / 被塞盘，盘满时第 5 项才亮已太迟"
             fi
         fi
         # 窗口右移：LAST_TS/LAST_USEDKB 顺位进窗，最老的出局。重启后头两轮窗不满
